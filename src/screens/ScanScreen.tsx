@@ -9,26 +9,50 @@ export default function ScanScreen({ navigation }: any) {
   const searchAndNavigate = async () => {
     if (!scannedSku) return;
     setLoading(true);
+
+    let queryLote = scannedSku.trim();
+    let queryProducto = '';
+    let cantidadExtraida = '';
+
+    if (queryLote.includes('-')) {
+      const parts = queryLote.split('-');
+      queryProducto = parts[0];
+      queryLote = parts[1];
+      if (parts.length > 2 && parts[2] !== '@') {
+        cantidadExtraida = parts[2];
+      }
+    }
+
     try {
       const { data, error } = await supabase
         .from('inventario_maestro')
         .select('*')
-        .eq('lote', scannedSku)
+        .eq('lote', queryLote)
         .single();
         
       if (data) {
-        navigation.navigate('Capture', { sku: scannedSku, data: data });
+        navigation.navigate('Capture', { 
+          sku: queryProducto || data.sku, 
+          lote: queryLote, 
+          data: data, 
+          cantidad: cantidadExtraida 
+        });
       } else {
-        // PostgrestError: JSON object requested, multiple (or no) rows returned
         throw new Error('No encontrado');
       }
     } catch (e: any) {
-      Alert.alert('Atención', 'Este SKU no existe en SAP. ¿Registrar como material nuevo?', [
+      Alert.alert('Atención', `El lote ${queryLote} no existe en SAP. ¿Registrar como material nuevo?`, [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Registrar', onPress: () => navigation.navigate('Capture', { sku: scannedSku }) }
+        { text: 'Registrar', onPress: () => navigation.navigate('Capture', { 
+            sku: queryProducto || queryLote, 
+            lote: queryLote, 
+            cantidad: cantidadExtraida 
+          }) 
+        }
       ]);
     } finally {
       setLoading(false);
+      setScannedSku(''); // Limpiar para el siguiente escaneo
     }
   };
 

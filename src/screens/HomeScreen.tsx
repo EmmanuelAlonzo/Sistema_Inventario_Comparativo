@@ -121,10 +121,17 @@ export default function HomeScreen({ navigation }: any) {
           onPress: async () => {
             setLoading(true);
             try {
-              // Borrar base maestra
-              await supabase.from('inventario_maestro').delete().neq('lote', '');
-              // Borrar conteos
-              await supabase.from('conteos_picking').delete().neq('id', '');
+              // Llamar a la Edge Function que tiene permisos de administrador (SERVICE_ROLE) para saltar políticas de seguridad
+              const { data, error } = await supabase.functions.invoke('clear-database');
+              
+              if (error) {
+                const trueError = error.context?.statusText || error.message;
+                throw new Error(trueError);
+              }
+
+              if (data && data.success === false) {
+                throw new Error(data.error);
+              }
               
               Alert.alert('Base de Datos Limpia', 'El sistema está listo para un nuevo inventario.');
               checkDatabaseState(); // Volver al estado inicial

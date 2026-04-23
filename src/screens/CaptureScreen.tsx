@@ -8,10 +8,12 @@ const FILAS = ['A', 'B', 'C'];
 const NIVELES = ['1', '2', '3', '4', '5', '6'];
 
 export default function CaptureScreen({ route, navigation }: any) {
+  const lote = route.params?.lote || route.params?.sku || 'Desconocido';
   const sku = route.params?.sku || 'Desconocido';
   const preloadedData = route.params?.data || null;
+  const initialCantidad = route.params?.cantidad || '';
   
-  const [cantidad, setCantidad] = useState('');
+  const [cantidad, setCantidad] = useState(initialCantidad);
   const [nave, setNave] = useState('');
   const [fila, setFila] = useState('');
   const [nivel, setNivel] = useState('');
@@ -21,12 +23,12 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   useEffect(() => {
     const fetchStock = async () => {
-      if (!preloadedData && sku !== 'Desconocido') {
+      if (!preloadedData && lote !== 'Desconocido') {
         try {
           const { data, error } = await supabase
             .from('inventario_maestro')
             .select('stock_sap')
-            .eq('lote', sku)
+            .eq('lote', lote)
             .single();
             
           if (data) setStockSap(data.stock_sap);
@@ -36,7 +38,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       }
     };
     fetchStock();
-  }, [sku]);
+  }, [lote]);
 
   const saveToDb = async (ubicacionReal: string, columnaStr: string) => {
     setLoading(true);
@@ -46,7 +48,7 @@ export default function CaptureScreen({ route, navigation }: any) {
 
       // Guardar directamente en Supabase (usando las columnas del esquema remoto)
       const { error } = await supabase.from('conteos_picking').insert({
-        lote: sku, // Se guarda en columna lote
+        lote: lote, // Se guarda usando el identificador único del lote
         cantidad_fisica: parseFloat(cantidad),
         ubicacion_fisica: ubicacionReal,
         timestamp,
@@ -58,7 +60,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       // Guardar respaldo offline opcional (para que uploadPendingCounts lo ignore porque sincronizado_drive=1)
       await dbLocal.runAsync(
         'INSERT INTO conteos_picking (id, lote, cantidad_fisica, nave, fila, columna, timestamp, sincronizado_drive) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
-        [idStr, sku, parseFloat(cantidad), nave, fila, columnaStr, timestamp]
+        [idStr, lote, parseFloat(cantidad), nave, fila, columnaStr, timestamp]
       ).catch(() => {});
 
       Alert.alert('Conteo Guardado', `Ubicación Real asignada: ${ubicacionReal}\nSincronizado con la Nube.`, [
@@ -100,8 +102,10 @@ export default function CaptureScreen({ route, navigation }: any) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
       <View style={styles.headerPanel}>
-        <Text style={styles.loteText}>SKU a Contar:</Text>
+        <Text style={styles.loteText}>Producto:</Text>
         <Text style={styles.loteValue}>{sku}</Text>
+        <Text style={[styles.loteText, {marginTop: 10}]}>Lote / Embarque:</Text>
+        <Text style={[styles.loteValue, {fontSize: 20}]}>{lote}</Text>
       </View>
       
       <View style={styles.formCard}>

@@ -12,9 +12,10 @@ CREATE TABLE IF NOT EXISTS public.app_settings (
 ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Permitir lectura de configuraciones" ON public.app_settings FOR SELECT USING (true);
 
--- 2. Tabla: inventario_maestro (La "Verdad" que viene de SAP - 36k registros)
+-- 2. Tabla: inventario_maestro (La "Verdad" que viene de SAP - Soporta duplicados de lote)
 CREATE TABLE IF NOT EXISTS public.inventario_maestro (
-  lote text PRIMARY KEY,
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  lote text NOT NULL,
   sku text,
   descripcion text,
   ubicacion_sap text,

@@ -57,12 +57,13 @@ serve(async (req: Request) => {
     }
     
     const spreadsheetId = files[0].id;
+    const spreadsheetName = files[0].name;
 
     // 3. Buscar la hoja correcta evaluando el esquema (cabeceras)
     const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
-    if (!metaRes.ok) throw new Error("Error obteniendo metadatos del Excel.");
+    if (!metaRes.ok) throw new Error(`Error obteniendo metadatos del Excel [${spreadsheetName}].`);
     const metaData = await metaRes.json();
     const sheets = metaData.sheets || [];
 
@@ -70,24 +71,36 @@ serve(async (req: Request) => {
     let targetHeaders: string[] = [];
     let headerRowIndex = 0;
     
-    // Revisamos hoja por hoja buscando en las primeras 10 filas
+    let debugInfo = "";
+    
+    // Revisamos hoja por hoja buscando en las primeras 20 filas
     for (const sheet of sheets) {
       const sheetName = sheet.properties.title;
-      const headUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'${sheetName}'!A1:Z10`;
+      const headUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'${sheetName}'!A1:Z20`;
       const headRes = await fetch(headUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!headRes.ok) continue;
+      if (!headRes.ok) {
+        debugInfo += `[${sheetName}: Error de acceso] `;
+        continue;
+      }
       
       const headData = await headRes.json();
       const rows = headData.values || [];
+      if (rows.length > 0) {
+        debugInfo += `[${sheetName}: Fila 1 tiene ${rows[0].length} columnas] `;
+      } else {
+        debugInfo += `[${sheetName}: Vacía] `;
+      }
       
       for (let r = 0; r < rows.length; r++) {
         const headers = rows[r] || [];
         const textHeaders = headers.map((h: string) => String(h).trim().toLowerCase());
         
-        const hasLote = textHeaders.includes('lote') || textHeaders.includes('producto') || textHeaders.includes('sku');
-        const hasStock = textHeaders.includes('inventario') || textHeaders.includes('suma de sistema') || textHeaders.includes('stock') || textHeaders.includes('suma de a');
+        // Buscamos si la fila contiene las palabras clave en alguna de sus celdas
+        const hasLote = textHeaders.some(h => h.includes('lote') || h.includes('batch'));
+        const hasProducto = textHeaders.some(h => h.includes('producto') || h.includes('sku') || h.includes('material') || h.includes('produ'));
+        const hasSistema = textHeaders.some(h => h.includes('sistema') || h.includes('stock') || h.includes('teorico'));
 
-        if (hasLote && hasStock) {
+        if (hasLote && hasProducto && hasSistema) {
           targetSheetName = sheetName;
           targetHeaders = headers;
           headerRowIndex = r;
@@ -98,7 +111,7 @@ serve(async (req: Request) => {
     }
 
     if (!targetSheetName) {
-      throw new Error("Ninguna hoja en el Excel tiene el esquema correcto. Asegúrate de que existan las columnas 'Producto' y 'Suma de Sistema'.");
+      throw new Error(`Archivo [${spreadsheetName}] no contiene el esquema. Hojas: ${debugInfo}.`);
     }
 
     // 4. Extraer todos los datos de la hoja encontrada
@@ -113,44 +126,43 @@ serve(async (req: Request) => {
       throw new Error(`La hoja ${targetSheetName} está vacía o no tiene datos debajo de las cabeceras.`);
     }
 
-    // 5. Mapeo Rápido de Columnas
-    const getIndex = (names: string[]) => targetHeaders.findIndex((col: string) => 
-      names.includes(String(col).trim().toLowerCase())
-    );
+    // 5. Mapeo Resiliente de Columnas (SAP Crudo)
+    const textHeadersLower = targetHeaders.map(h => String(h).trim().toLowerCase());
+    const findIdx = (keywords: string[]) => textHeadersLower.findIndex(h => keywords.some(k => h.includes(k)));
     
-    // Soportamos el esquema nuevo (Producto, Suma de Sistema)
-    const idxLote = getIndex(['lote', 'producto', 'sku']);
-    const idxDesc = getIndex(['descripcion', 'descripción']);
-    const idxInventario = getIndex(['inventario', 'suma de sistema', 'stock']);
-    const idxUbicacion = getIndex(['ubicación', 'ubicacion', 'nave']);
+    const idxLote = findIdx(['lote']);
+    const idxProducto = findIdx(['producto', 'sku', 'produ']);
+    const idxDesc = findIdx(['descrip', 'nombre']);
+    const idxSistema = findIdx(['sistema', 'stock', 'teorico']);
+    const idxUbicacion = findIdx(['ubicac', 'ubi', 'posicion']);
 
-    if (idxLote === -1 || idxInventario === -1) {
-      throw new Error("No se encontraron las columnas clave en la hoja.");
+    if (idxLote === -1 || idxProducto === -1 || idxSistema === -1) {
+      throw new Error("No se encontraron todas las columnas clave (Lote, Producto, Sistema). Verifica los encabezados del Excel.");
     }
 
     // Saltamos las filas hasta llegar a los datos (después de la cabecera)
     const rowsToInsert = values.slice(headerRowIndex + 1).map((row: any) => ({
-      lote: String(row[idxLote]), 
-      sku: String(row[idxLote]),  
-      descripcion: idxDesc !== -1 ? String(row[idxDesc]) : null,
-      ubicacion_sap: idxUbicacion !== -1 ? String(row[idxUbicacion]) : null,
-      stock_sap: parseFloat(String(row[idxInventario]).replace(/,/g, '') || "0") || 0
-    })).filter((r: any) => r.lote !== "undefined" && r.lote !== "" && r.lote !== "null"); // Filtrar vacíos
+      lote: String(row[idxLote]).trim(), 
+      sku: String(row[idxProducto]).trim(),  
+      descripcion: idxDesc !== -1 ? String(row[idxDesc]).trim() : null,
+      ubicacion_sap: idxUbicacion !== -1 ? String(row[idxUbicacion]).trim() : null,
+      stock_sap: parseFloat(String(row[idxSistema]).replace(/,/g, '') || "0") || 0
+    })).filter((r: any) => r.lote !== "undefined" && r.lote !== "" && r.lote !== "null");
 
-    // 4. Inserción de 5000 en 5000 a Supabase (PostgreSQL Upsert)
+    // 4. Inserción de 5000 en 5000 a Supabase (PostgreSQL Plain Insert)
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
     // Vaciamos la tabla antigua por seguridad
-    await supabaseAdmin.from('inventario_maestro').delete().neq('lote', '');
+    await supabaseAdmin.from('inventario_maestro').delete().neq('lote', 'FORCE_DELETE_ALL_VAL');
 
     // Inyectamos en BATCH
     const chunkSize = 5000;
     for (let i = 0; i < rowsToInsert.length; i += chunkSize) {
       const chunk = rowsToInsert.slice(i, i + chunkSize);
-      const { error } = await supabaseAdmin.from('inventario_maestro').upsert(chunk);
+      const { error } = await supabaseAdmin.from('inventario_maestro').insert(chunk);
       if (error) throw error;
     }
 
