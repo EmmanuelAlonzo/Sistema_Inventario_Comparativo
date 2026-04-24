@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Barcode, CloudDownload, CloudUpload, FileSpreadsheet, Trash2 } from 'lucide-react-native';
 import { supabase } from '../services/supabase';
-import { uploadPendingCounts } from '../services/syncService';
+import * as Updates from 'expo-updates';
 
 export default function HomeScreen({ navigation }: any) {
   const [loading, setLoading] = useState(false);
@@ -10,6 +10,31 @@ export default function HomeScreen({ navigation }: any) {
   const [checking, setChecking] = useState(true);
   const [isKillSwitched, setIsKillSwitched] = useState(false);
   const [killMessage, setKillMessage] = useState('La aplicación ha sido desactivada por el administrador.');
+
+  // Sincronizar actualización OTA
+  useEffect(() => {
+    async function onFetchUpdateAsync() {
+      try {
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          Alert.alert(
+            'Actualización Disponible',
+            'Hay una nueva versión del sistema. ¿Deseas descargarla y reiniciar?',
+            [
+              { text: 'Más tarde', style: 'cancel' },
+              { text: 'Actualizar', onPress: async () => {
+                await Updates.fetchUpdateAsync();
+                await Updates.reloadAsync();
+              }}
+            ]
+          );
+        }
+      } catch (error) {
+        console.log("No se pudo verificar actualizaciones (posiblemente en modo dev):", error);
+      }
+    }
+    onFetchUpdateAsync();
+  }, []);
 
   // Verificar estado de la base de datos al montar
   useEffect(() => {
@@ -170,6 +195,26 @@ export default function HomeScreen({ navigation }: any) {
       ]
     );
   };
+
+  if (isKillSwitched) {
+    return (
+      <View style={[styles.container, { alignItems: 'center', backgroundColor: '#000' }]}>
+        <View style={{ backgroundColor: 'rgba(255,0,0,0.1)', padding: 30, borderRadius: 100, marginBottom: 30 }}>
+          <Text style={{ fontSize: 80 }}>🔒</Text>
+        </View>
+        <Text style={[styles.title, { color: '#ff4444', textAlign: 'center' }]}>ACCESO RESTRINGIDO</Text>
+        <Text style={{ color: '#888', textAlign: 'center', marginTop: 20, fontSize: 18, paddingHorizontal: 30 }}>
+          {killMessage}
+        </Text>
+        <TouchableOpacity 
+          style={[styles.secondaryButton, { marginTop: 50, borderColor: '#444' }]} 
+          onPress={checkKillSwitch}
+        >
+          <Text style={{ color: '#fff' }}>Reintentar Conexión</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   if (checking) {
     return (

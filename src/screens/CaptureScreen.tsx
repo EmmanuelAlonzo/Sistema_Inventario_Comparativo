@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { supabase } from '../services/supabase';
-import { dbLocal } from '../database/sqlite';
 
 const NAVES = ['201', '202', '203', '204', '205', '206', '207', '208', '209', '210'];
 const FILAS = ['A', 'B', 'C'];
@@ -57,18 +56,12 @@ export default function CaptureScreen({ route, navigation }: any) {
       
       if (error) throw error;
       
-      // Guardar respaldo offline opcional (para que uploadPendingCounts lo ignore porque sincronizado_drive=1)
-      await dbLocal.runAsync(
-        'INSERT INTO conteos_picking (id, lote, cantidad_fisica, nave, fila, columna, timestamp, sincronizado_drive) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
-        [idStr, lote, parseFloat(cantidad), nave, fila, columnaStr, timestamp]
-      ).catch(() => {});
-
-      Alert.alert('Conteo Guardado', `Ubicación Real asignada: ${ubicacionReal}\nSincronizado con la Nube.`, [
+      Alert.alert('Conteo Guardado', `Ubicación Real: ${ubicacionReal}\nSincronizado con Supabase.`, [
         { text: 'OK', onPress: () => navigation.goBack() }
       ]);
     } catch (error: any) {
       console.error(error);
-      Alert.alert('Error', 'No se pudo guardar en Supabase: ' + error.message);
+      Alert.alert('Error', 'No se pudo guardar en la nube: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -164,8 +157,8 @@ export default function CaptureScreen({ route, navigation }: any) {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-          <Text style={styles.saveButtonText}>CONFIRMAR CONTEO OFFLINE</Text>
+        <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={loading}>
+          {loading ? <ActivityIndicator color="#000" /> : <Text style={styles.saveButtonText}>CONFIRMAR CONTEO</Text>}
         </TouchableOpacity>
       </View>
     </ScrollView>
