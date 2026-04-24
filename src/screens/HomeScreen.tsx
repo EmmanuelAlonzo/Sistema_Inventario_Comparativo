@@ -8,17 +8,42 @@ export default function HomeScreen({ navigation }: any) {
   const [loading, setLoading] = useState(false);
   const [hasData, setHasData] = useState(false);
   const [checking, setChecking] = useState(true);
+  const [isKillSwitched, setIsKillSwitched] = useState(false);
+  const [killMessage, setKillMessage] = useState('La aplicación ha sido desactivada por el administrador.');
 
   // Verificar estado de la base de datos al montar
   useEffect(() => {
+    checkKillSwitch();
     checkDatabaseState();
     
     // Opcional: suscribirse a cambios, pero podemos checarlo al volver
     const unsubscribe = navigation.addListener('focus', () => {
+      checkKillSwitch();
       checkDatabaseState();
     });
     return unsubscribe;
   }, [navigation]);
+
+  const checkKillSwitch = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('app_settings')
+        .select('value, description')
+        .eq('key', 'is_app_active')
+        .single();
+      
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 is not found, which is fine
+      
+      if (data && data.value === 'false') {
+        setIsKillSwitched(true);
+        if (data.description) setKillMessage(data.description);
+      } else {
+        setIsKillSwitched(false);
+      }
+    } catch (err) {
+      console.error("Error checking kill switch:", err);
+    }
+  };
 
   const checkDatabaseState = async () => {
     setChecking(true);
