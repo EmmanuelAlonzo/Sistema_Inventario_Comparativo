@@ -28,7 +28,11 @@
     },
     "plugins": [
       "expo-sqlite",
-      "expo-updates"
+      "expo-updates",
+      "expo-camera",
+      "expo-location",
+      "expo-notifications",
+      "expo-local-authentication"
     ]
   }
 }
