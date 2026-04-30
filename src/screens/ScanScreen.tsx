@@ -49,11 +49,38 @@ export default function ScanScreen({ navigation }: any) {
     }
 
     try {
-      // Buscamos coincidencia exacta por LOTE o por SKU (sin límite de 1)
-      const { data, error } = await supabase
-        .from('inventario_maestro')
-        .select('*')
-        .or(`lote.eq."${queryLote}",sku.eq."${rawInput}"`);
+      let data: any[] | null = null;
+      let error = null;
+
+      if (queryProducto && queryProducto !== '') {
+        // 1. Si es un código compuesto, buscar coincidencia exacta
+        const res = await supabase
+          .from('inventario_maestro')
+          .select('*')
+          .eq('sku', queryProducto)
+          .eq('lote', queryLote);
+        data = res.data;
+        error = res.error;
+      } else {
+        // 2. Búsqueda simple: Primero intentar por SKU
+        const resSku = await supabase
+          .from('inventario_maestro')
+          .select('*')
+          .eq('sku', rawInput);
+        
+        if (resSku.data && resSku.data.length > 0) {
+          data = resSku.data;
+          error = resSku.error;
+        } else {
+          // 3. Si no existe como SKU, entonces buscamos como Lote
+          const resLote = await supabase
+            .from('inventario_maestro')
+            .select('*')
+            .eq('lote', rawInput);
+          data = resLote.data;
+          error = resLote.error;
+        }
+      }
         
       if (data && data.length > 0) {
         if (data.length === 1) {
