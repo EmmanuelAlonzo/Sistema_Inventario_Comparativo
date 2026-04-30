@@ -11,6 +11,7 @@ export default function CaptureScreen({ route, navigation }: any) {
   const sku = route.params?.sku || 'Desconocido';
   const preloadedData = route.params?.data || null;
   const initialCantidad = route.params?.cantidad || '';
+  const descripcion = preloadedData?.descripcion || '';
   
   const [cantidad, setCantidad] = useState(initialCantidad);
   const [nave, setNave] = useState('');
@@ -97,6 +98,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       <View style={styles.headerPanel}>
         <Text style={styles.loteText}>Producto:</Text>
         <Text style={styles.loteValue}>{sku}</Text>
+        {descripcion ? <Text style={styles.descText}>{descripcion}</Text> : null}
         <Text style={[styles.loteText, {marginTop: 10}]}>Lote / Embarque:</Text>
         <Text style={[styles.loteValue, {fontSize: 20}]}>{lote}</Text>
       </View>
@@ -190,6 +192,13 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 2,
     marginTop: 5,
+  },
+  descText: {
+    color: '#00ffcc',
+    fontSize: 14,
+    marginTop: 5,
+    textAlign: 'center',
+    fontStyle: 'italic'
   },
   formCard: {
     backgroundColor: '#1E1E1E',

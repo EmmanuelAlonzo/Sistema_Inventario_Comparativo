@@ -21,7 +21,16 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ],
+      "package": "com.chema12.inventario"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -33,6 +42,17 @@
       "expo-location",
       "expo-notifications",
       "expo-local-authentication"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9616cb4a-acc9-4e08-ab3f-1119c6a2404b"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/9616cb4a-acc9-4e08-ab3f-1119c6a2404b"
+    }
   }
 }

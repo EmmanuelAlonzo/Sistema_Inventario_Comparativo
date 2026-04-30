@@ -1,12 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, Button, TextInput, Alert, ActivityIndicator, Modal, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { supabase } from '../services/supabase';
+import ZebraScanner from '../components/Scanner/ZebraScanner';
+import CameraScanner from '../components/Scanner/CameraScanner';
+import * as Device from 'expo-device';
 
 export default function ScanScreen({ navigation }: any) {
   const [scannedSku, setScannedSku] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [useCamera, setUseCamera] = useState(false);
+
+  useEffect(() => {
+    // Si el fabricante no es Zebra, usamos la cámara por defecto.
+    const isZebra = Device.manufacturer?.toLowerCase().includes('zebra');
+    setUseCamera(!isZebra);
+  }, []);
 
   const navigateToCapture = (item: any, cantidadExtraida: string) => {
     setShowModal(false);
@@ -18,11 +28,12 @@ export default function ScanScreen({ navigation }: any) {
     });
   };
 
-  const searchAndNavigate = async () => {
-    if (!scannedSku) return;
+  const searchAndNavigate = async (codeToSearch?: string | any) => {
+    const inputToUse = typeof codeToSearch === 'string' ? codeToSearch : scannedSku;
+    if (!inputToUse) return;
     setLoading(true);
 
-    const rawInput = scannedSku.trim();
+    const rawInput = inputToUse.trim();
     let queryLote = rawInput;
     let queryProducto = '';
     let cantidadExtraida = '';
@@ -73,17 +84,25 @@ export default function ScanScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Escáner de Inventario</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Escáner de Inventario</Text>
+        <TouchableOpacity 
+          style={styles.toggleButton} 
+          onPress={() => setUseCamera(!useCamera)}
+        >
+          <Text style={styles.toggleText}>{useCamera ? '📸 Cámara' : '📳 Láser'}</Text>
+        </TouchableOpacity>
+      </View>
       
-      <TextInput 
-        style={styles.input}
-        placeholder="Escanear SKU o Lote..."
-        placeholderTextColor="#555"
-        autoFocus
-        value={scannedSku}
-        onChangeText={setScannedSku}
-        onSubmitEditing={searchAndNavigate}
-      />
+      {useCamera ? (
+        <CameraScanner onScan={searchAndNavigate} />
+      ) : (
+        <ZebraScanner 
+          onScan={searchAndNavigate} 
+          scannedSku={scannedSku} 
+          setScannedSku={setScannedSku} 
+        />
+      )}
 
       <View style={{ marginVertical: 20, width: '60%' }}>
         <TouchableOpacity style={styles.manualButton} onPress={searchAndNavigate} disabled={loading}>
@@ -107,8 +126,9 @@ export default function ScanScreen({ navigation }: any) {
                   style={styles.itemCard}
                   onPress={() => navigateToCapture(item, '')}
                 >
-                  <View>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
                     <Text style={styles.itemLote}>Lote: {item.lote}</Text>
+                    {item.descripcion ? <Text style={styles.itemDesc} numberOfLines={2}>{item.descripcion}</Text> : null}
                     <Text style={styles.itemInfo}>Stock SAP: {item.stock_sap} | Ubic: {item.ubicacion_sap}</Text>
                   </View>
                   <Text style={styles.selectText}>SELECCIONAR</Text>
@@ -134,11 +154,29 @@ const styles = StyleSheet.create({
     backgroundColor: '#121212',
     padding: 20
   },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 20,
+    marginTop: 20
+  },
   title: {
     color: '#fff',
     fontSize: 20,
-    marginBottom: 20,
     fontWeight: 'bold'
+  },
+  toggleButton: {
+    backgroundColor: '#333',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  toggleText: {
+    color: '#00ffcc',
+    fontWeight: 'bold',
+    fontSize: 14
   },
   input: {
     backgroundColor: '#2A2A2A',
@@ -203,6 +241,12 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold'
+  },
+  itemDesc: {
+    color: '#00ffcc',
+    fontSize: 12,
+    marginTop: 2,
+    fontStyle: 'italic'
   },
   itemInfo: {
     color: '#aaa',
