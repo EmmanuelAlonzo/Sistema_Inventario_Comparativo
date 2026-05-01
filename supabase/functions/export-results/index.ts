@@ -146,6 +146,31 @@ serve(async (req: Request) => {
     if (metaData.sheets[0].properties.title !== 'DASHBOARD') {
       setupRequests.push({ updateSheetProperties: { properties: { sheetId: dashboardSheetId, title: "DASHBOARD" }, fields: "title" } });
     }
+    
+    // --- RESTAURAR FORMATOS Y CUADRÍCULAS ---
+    setupRequests.push({
+      updateSheetProperties: {
+        properties: { sheetId: dashboardSheetId, gridProperties: { hideGridlines: false } },
+        fields: "gridProperties.hideGridlines"
+      }
+    });
+    setupRequests.push({
+      repeatCell: {
+        range: { sheetId: dashboardSheetId },
+        cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 1, blue: 1 }, textFormat: { foregroundColor: { red: 0, green: 0, blue: 0 } } } },
+        fields: "userEnteredFormat(backgroundColor,textFormat)"
+      }
+    });
+    // Limpiar bordes y alineaciones
+    setupRequests.push({
+      repeatCell: {
+        range: { sheetId: dashboardSheetId },
+        cell: { userEnteredFormat: {} },
+        fields: "userEnteredFormat(borders,horizontalAlignment,verticalAlignment)"
+      }
+    });
+    // ---------------------------------------
+
     if (!lotesSheetId) setupRequests.push({ addSheet: { properties: { title: "DATA_LOTES" } } });
     if (!productosSheetId) setupRequests.push({ addSheet: { properties: { title: "DATA_PRODUCTOS" } } });
     
