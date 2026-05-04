@@ -6,9 +6,10 @@ import { Audio } from 'expo-av';
 
 interface CameraScannerProps {
   onScan: (data: string) => void;
+  isActive?: boolean;
 }
 
-export default function CameraScanner({ onScan }: CameraScannerProps) {
+export default function CameraScanner({ onScan, isActive = true }: CameraScannerProps) {
   const [permission, requestPermission] = useCameraPermissions();
   const [flashOn, setFlashOn] = useState(false);
   const lastScanned = useRef<{ data: string; time: number }>({ data: '', time: 0 });
@@ -50,6 +51,8 @@ export default function CameraScanner({ onScan }: CameraScannerProps) {
   }
 
   const handleBarcodeScanned = async ({ data }: { data: string }) => {
+    if (!isActive) return;
+
     const now = Date.now();
     // Bloqueo de 1.5 segundos para el MISMO código
     if (lastScanned.current.data === data && (now - lastScanned.current.time) < 1500) {

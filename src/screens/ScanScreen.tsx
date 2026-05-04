@@ -122,7 +122,7 @@ export default function ScanScreen({ navigation }: any) {
       </View>
       
       {useCamera ? (
-        <CameraScanner onScan={searchAndNavigate} />
+        <CameraScanner onScan={searchAndNavigate} isActive={!showModal && !loading} />
       ) : (
         <ZebraScanner 
           onScan={searchAndNavigate} 
