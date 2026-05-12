@@ -11,6 +11,7 @@ export default function ScanScreen({ navigation }: any) {
   const [results, setResults] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [useCamera, setUseCamera] = useState(false);
+  const [showAlert, setShowAlert] = useState(false);
 
   useEffect(() => {
     // Si el fabricante no es Zebra, usamos la cámara por defecto.
@@ -38,13 +39,21 @@ export default function ScanScreen({ navigation }: any) {
     let queryProducto = '';
     let cantidadExtraida = '';
 
-    // Soporte para códigos compuestos (ej: SKU-LOTE-CANTIDAD)
+    // Soporte para códigos compuestos (ej: SKU-LOTE-CANTIDAD o [SKU-CON-GUION]-LOTE-CANTIDAD)
     if (rawInput.includes('-')) {
       const parts = rawInput.split('-');
-      queryProducto = parts[0];
-      queryLote = parts[1];
-      if (parts.length > 2 && parts[2] !== '@') {
-        cantidadExtraida = parts[2];
+      if (parts.length >= 3) {
+        // Leer de derecha a izquierda (split inverso)
+        const possibleQty = parts[parts.length - 1];
+        if (possibleQty !== '@') {
+          cantidadExtraida = possibleQty;
+        }
+        queryLote = parts[parts.length - 2];
+        // Reconstruir el SKU por si tenía guiones originalmente
+        queryProducto = parts.slice(0, parts.length - 2).join('-');
+      } else if (parts.length === 2) {
+        queryProducto = parts[0];
+        queryLote = parts[1];
       }
     }
 
@@ -94,13 +103,17 @@ export default function ScanScreen({ navigation }: any) {
         throw new Error('No encontrado');
       }
     } catch (e: any) {
+      setShowAlert(true);
       Alert.alert('Atención', `El material o SKU "${rawInput}" no existe en SAP. ¿Registrar como material nuevo?`, [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Registrar', onPress: () => navigation.navigate('Capture', { 
-            sku: queryProducto || rawInput, 
-            lote: queryLote || rawInput, 
-            cantidad: cantidadExtraida 
-          }) 
+        { text: 'Cancelar', style: 'cancel', onPress: () => setShowAlert(false) },
+        { text: 'Registrar', onPress: () => { 
+            setShowAlert(false);
+            navigation.navigate('Capture', { 
+              sku: queryProducto || rawInput, 
+              lote: queryLote || rawInput, 
+              cantidad: cantidadExtraida 
+            }) 
+          } 
         }
       ]);
     } finally {
@@ -122,7 +135,7 @@ export default function ScanScreen({ navigation }: any) {
       </View>
       
       {useCamera ? (
-        <CameraScanner onScan={searchAndNavigate} isActive={!showModal && !loading} />
+        <CameraScanner onScan={searchAndNavigate} isActive={!showModal && !loading && !showAlert} />
       ) : (
         <ZebraScanner 
           onScan={searchAndNavigate} 

@@ -46,12 +46,27 @@ serve(async (req: Request) => {
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
 
-    // 3. Fetch Data from Supabase
-    const { data: maestro, error: maestroErr } = await supabaseAdmin.from('inventario_maestro').select('*');
-    if (maestroErr) throw maestroErr;
+    // 1. Obtener datos de Supabase (con paginación para inventario_maestro)
+    let maestro: any[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    
+    while (true) {
+      const { data, error } = await supabaseAdmin
+        .from('inventario_maestro')
+        .select('*')
+        .range(page * pageSize, (page + 1) * pageSize - 1);
+        
+      if (error) throw new Error("Error obteniendo maestro: " + error.message);
+      if (!data || data.length === 0) break;
+      
+      maestro.push(...data);
+      if (data.length < pageSize) break;
+      page++;
+    }
 
     const { data: picking, error: pickingErr } = await supabaseAdmin.from('conteos_picking').select('*');
-    if (pickingErr) throw pickingErr;
+    if (pickingErr) throw new Error("Error obteniendo picking.");
 
     // --- Lógica de Procesamiento ---
     
@@ -92,35 +107,39 @@ serve(async (req: Request) => {
 
     // 3. Identificar Lotes escaneados que NO están en el maestro
     const maestroLotes = new Set(maestro?.map(m => m.lote));
+
     picking?.forEach(p => {
       if (!maestroLotes.has(p.lote)) {
         const loteKey = p.lote || "Desconocido";
+        const skuKey = p.sku || ""; // Si no hay SKU real, dejarlo en blanco
+        
         reportLotes.push([
-          "NUEVO", 
-          "Lote no registrado en SAP", 
+          skuKey, // Mostrar el SKU real en la primera columna (o en blanco)
+          "Código no registrado en SAP", 
           loteKey, 
           p.ubicacion_fisica || "N/A", 
-          "0", 
-          String(p.cantidad_fisica || 0), 
-          String(p.cantidad_fisica || 0)
+          0, // Enviar como número
+          p.cantidad_fisica || 0, // Enviar como número
+          p.cantidad_fisica || 0 // Enviar como número
         ]);
         
-        // También sumarlo al producto "NUEVOS"
-        if (!productAgg["NUEVOS"]) productAgg["NUEVOS"] = { desc: "Lotes nuevos/imprevistos", sap: 0, fisico: 0 };
-        productAgg["NUEVOS"].fisico += (p.cantidad_fisica || 0);
+        // Sumar al producto correspondiente usando el SKU real (si existe) o un placeholder
+        const aggKey = skuKey || "NUEVO";
+        if (!productAgg[aggKey]) productAgg[aggKey] = { desc: "Código no registrado en SAP", sap: 0, fisico: 0 };
+        productAgg[aggKey].fisico += (p.cantidad_fisica || 0);
       }
     });
 
     // 4. Preparar DATA_PRODUCTOS (Agrupado)
-    const reportProductos = [["Producto (SKU)", "Descripción", "Suma de Sistema (SAP)", "Suma de Conteo App", "Diferencia Neta"]];
+    const reportProductos: (string | number)[][] = [["Producto (SKU)", "Descripción", "Suma de Sistema (SAP)", "Suma de Conteo App", "Diferencia Neta"]];
     Object.keys(productAgg).forEach(sku => {
       const p = productAgg[sku];
       reportProductos.push([
         sku,
         p.desc,
-        String(p.sap),
-        String(p.fisico),
-        String(p.fisico - p.sap)
+        p.sap,
+        p.fisico,
+        p.fisico - p.sap
       ]);
     });
 
@@ -197,7 +216,7 @@ serve(async (req: Request) => {
     await clearSheets("DATA_PRODUCTOS");
     await clearSheets("DASHBOARD");
 
-    const updateSheet = async (name: string, vals: any[][]) => fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${name}!A1?valueInputOption=USER_ENTERED`, {
+    const updateSheet = async (name: string, vals: any[][]) => fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${name}!A1?valueInputOption=RAW`, {
       method: "PUT", headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: JSON.stringify({ range: `${name}!A1`, majorDimension: "ROWS", values: vals })
     });
@@ -206,8 +225,8 @@ serve(async (req: Request) => {
     await updateSheet("DATA_PRODUCTOS", reportProductos);
 
     // 7. KPIs y Dashboard (Sobre DATA_PRODUCTOS)
-    const diffProdCount = reportProductos.slice(1).filter(r => r[4] !== "0").length;
-    const dashValues = [
+    const diffProdCount = reportProductos.slice(1).filter(r => Number(r[4]) !== 0).length;
+    const dashValues: (string | number)[][] = [
       ["📊 RESUMEN EJECUTIVO (VALIDACIÓN LIMPIA)"],
       ["Fecha de Generación:", new Date().toLocaleDateString()],
       [""],
@@ -220,7 +239,7 @@ serve(async (req: Request) => {
     ];
 
     const topDiffs = reportProductos.slice(1)
-      .sort((a, b) => Math.abs(parseFloat(b[4])) - Math.abs(parseFloat(a[4])))
+      .sort((a, b) => Math.abs(Number(b[4])) - Math.abs(Number(a[4])))
       .slice(0, 20);
     topDiffs.forEach(t => dashValues.push([t[0], t[4]]));
 

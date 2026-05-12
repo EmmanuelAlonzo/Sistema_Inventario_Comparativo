@@ -52,102 +52,148 @@ serve(async (req: Request) => {
     if (files.length === 0) {
       throw new Error("No se encontró ningún archivo de Excel (Spreadsheet) compartido con el bot.");
     }
-    if (files.length > 1) {
-      throw new Error("Hay más de un archivo Excel compartido con el bot. Por favor deja solo el archivo Madre.");
-    }
     
-    const spreadsheetId = files[0].id;
-    const spreadsheetName = files[0].name;
+    // Diccionario para fusionar datos y deduplicar por Lote
+    const mergedRows = new Map<string, any>();
+    
+    // Procesamos todos los archivos encontrados
+    for (const file of files) {
+      const spreadsheetId = file.id;
+      const spreadsheetName = file.name;
 
-    // 3. Buscar la hoja correcta evaluando el esquema (cabeceras)
-    const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-    if (!metaRes.ok) throw new Error(`Error obteniendo metadatos del Excel [${spreadsheetName}].`);
-    const metaData = await metaRes.json();
-    const sheets = metaData.sheets || [];
-
-    let targetSheetName = "";
-    let targetHeaders: string[] = [];
-    let headerRowIndex = 0;
-    
-    let debugInfo = "";
-    
-    // Revisamos hoja por hoja buscando en las primeras 20 filas
-    for (const sheet of sheets) {
-      const sheetName = sheet.properties.title;
-      const headUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'${sheetName}'!A1:Z20`;
-      const headRes = await fetch(headUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!headRes.ok) {
-        debugInfo += `[${sheetName}: Error de acceso] `;
+      // 3. Buscar la hoja correcta evaluando el esquema (cabeceras)
+      const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!metaRes.ok) {
+        console.warn(`Error obteniendo metadatos del Excel [${spreadsheetName}].`);
         continue;
       }
       
-      const headData = await headRes.json();
-      const rows = headData.values || [];
-      if (rows.length > 0) {
-        debugInfo += `[${sheetName}: Fila 1 tiene ${rows[0].length} columnas] `;
-      } else {
-        debugInfo += `[${sheetName}: Vacía] `;
+      const metaData = await metaRes.json();
+      const sheets = metaData.sheets || [];
+
+      let targetSheetName = "";
+      let targetHeaders: string[] = [];
+      let headerRowIndex = 0;
+      
+      let debugInfo = "";
+      
+      // Revisamos hoja por hoja buscando en las primeras 20 filas
+      for (const sheet of sheets) {
+        const sheetName = sheet.properties.title;
+        const headUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'${sheetName}'!A1:Z20`;
+        const headRes = await fetch(headUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!headRes.ok) {
+          debugInfo += `[${sheetName}: Error de acceso] `;
+          continue;
+        }
+        
+        const headData = await headRes.json();
+        const rows = headData.values || [];
+        if (rows.length > 0) {
+          debugInfo += `[${sheetName}: Fila 1 tiene ${rows[0].length} columnas] `;
+        } else {
+          debugInfo += `[${sheetName}: Vacía] `;
+        }
+        
+        for (let r = 0; r < rows.length; r++) {
+          const headers = rows[r] || [];
+          const textHeaders = headers.map((h: string) => String(h).trim().toLowerCase());
+          
+          // Buscamos si la fila contiene las palabras clave en alguna de sus celdas
+          const hasLote = textHeaders.some(h => h.includes('lote') || h.includes('batch'));
+          const hasProducto = textHeaders.some(h => h.includes('producto') || h.includes('sku') || h.includes('material') || h.includes('produ'));
+          const hasSistema = textHeaders.some(h => h.includes('sistema') || h.includes('stock') || h.includes('teorico') || h.includes('libre'));
+
+          if (hasLote && hasProducto && hasSistema) {
+            targetSheetName = sheetName;
+            targetHeaders = headers;
+            headerRowIndex = r;
+            break;
+          }
+        }
+        if (targetSheetName) break;
+      }
+
+      if (!targetSheetName) {
+        console.warn(`Archivo [${spreadsheetName}] ignorado: no contiene el esquema. Hojas: ${debugInfo}.`);
+        continue; // Pasamos al siguiente archivo
+      }
+
+      // 4. Extraer todos los datos de la hoja encontrada
+      const sheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'${targetSheetName}'!A1:Z40000`;
+      const sheetRes = await fetch(sheetUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      if (!sheetRes.ok) {
+        console.warn(`Error descargando los datos de la hoja en [${spreadsheetName}].`);
+        continue;
       }
       
-      for (let r = 0; r < rows.length; r++) {
-        const headers = rows[r] || [];
-        const textHeaders = headers.map((h: string) => String(h).trim().toLowerCase());
-        
-        // Buscamos si la fila contiene las palabras clave en alguna de sus celdas
-        const hasLote = textHeaders.some(h => h.includes('lote') || h.includes('batch'));
-        const hasProducto = textHeaders.some(h => h.includes('producto') || h.includes('sku') || h.includes('material') || h.includes('produ'));
-        const hasSistema = textHeaders.some(h => h.includes('sistema') || h.includes('stock') || h.includes('teorico'));
+      const { values } = await sheetRes.json();
+      if (!values || values.length <= headerRowIndex + 1) {
+        console.warn(`La hoja ${targetSheetName} en [${spreadsheetName}] está vacía.`);
+        continue;
+      }
 
-        if (hasLote && hasProducto && hasSistema) {
-          targetSheetName = sheetName;
-          targetHeaders = headers;
-          headerRowIndex = r;
-          break;
+      // 5. Mapeo Resiliente de Columnas
+      const textHeadersLower = targetHeaders.map(h => String(h).trim().toLowerCase());
+      const findIdx = (keywords: string[]) => textHeadersLower.findIndex(h => keywords.some(k => h.includes(k)));
+      
+      const idxLote = findIdx(['lote', 'batch']);
+      const idxProducto = findIdx(['producto', 'sku', 'produ', 'material']);
+      const idxDesc = findIdx(['descrip', 'nombre', 'texto breve']);
+      const idxSistema = findIdx(['sistema', 'stock', 'teorico', 'libre']);
+      const idxUbicacion = findIdx(['ubicac', 'ubi', 'posicion']);
+
+      if (idxLote === -1 || idxProducto === -1 || idxSistema === -1) {
+        console.warn(`Archivo [${spreadsheetName}] ignorado: No se encontraron todas las columnas clave.`);
+        continue;
+      }
+
+      const isManipulatedDb = idxUbicacion !== -1;
+
+      // Procesar e insertar en el Map
+      const dataRows = values.slice(headerRowIndex + 1);
+      for (const row of dataRows) {
+        const lote = String(row[idxLote] || "").trim();
+        if (lote === "undefined" || lote === "" || lote === "null") continue;
+
+        const sku = String(row[idxProducto] || "").trim();
+        const descripcion = idxDesc !== -1 ? String(row[idxDesc] || "").trim() : null;
+        const ubicacion_sap = idxUbicacion !== -1 ? String(row[idxUbicacion] || "").trim() : null;
+        const stock_sap = parseFloat(String(row[idxSistema] || "").replace(/,/g, '') || "0") || 0;
+
+        // La llave debe ser una combinación de SKU y Lote, ya que distintos SKUs pueden compartir el mismo Lote
+        const key = `${sku}_${lote}`;
+        const existing = mergedRows.get(key);
+        
+        // Reglas de prioridad de fusión
+        if (existing) {
+          if (isManipulatedDb) {
+            // El archivo manipulado manda, sobreescribe los datos del crudo
+            mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, stock_sap, isManipulated: true });
+          } else {
+            // Si el archivo actual es el crudo, solo lo guardamos si el existente NO es manipulado
+            if (!existing.isManipulated) {
+              mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, stock_sap, isManipulated: false });
+            }
+          }
+        } else {
+          // Si no existía, lo agregamos
+          mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, stock_sap, isManipulated: isManipulatedDb });
         }
       }
-      if (targetSheetName) break;
     }
 
-    if (!targetSheetName) {
-      throw new Error(`Archivo [${spreadsheetName}] no contiene el esquema. Hojas: ${debugInfo}.`);
+    // Convertimos el mapa a un arreglo y eliminamos la propiedad temporal 'isManipulated'
+    const rowsToInsert = Array.from(mergedRows.values()).map(({ isManipulated, ...rest }) => rest);
+
+    if (rowsToInsert.length === 0) {
+      throw new Error("No se encontraron registros válidos en ninguno de los archivos.");
     }
-
-    // 4. Extraer todos los datos de la hoja encontrada
-    const sheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'${targetSheetName}'!A1:Z40000`;
-    const sheetRes = await fetch(sheetUrl, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-
-    if (!sheetRes.ok) throw new Error("Error descargando los datos de la hoja seleccionada.");
-    const { values } = await sheetRes.json();
-    if (!values || values.length <= headerRowIndex + 1) {
-      throw new Error(`La hoja ${targetSheetName} está vacía o no tiene datos debajo de las cabeceras.`);
-    }
-
-    // 5. Mapeo Resiliente de Columnas (SAP Crudo)
-    const textHeadersLower = targetHeaders.map(h => String(h).trim().toLowerCase());
-    const findIdx = (keywords: string[]) => textHeadersLower.findIndex(h => keywords.some(k => h.includes(k)));
-    
-    const idxLote = findIdx(['lote']);
-    const idxProducto = findIdx(['producto', 'sku', 'produ']);
-    const idxDesc = findIdx(['descrip', 'nombre']);
-    const idxSistema = findIdx(['sistema', 'stock', 'teorico']);
-    const idxUbicacion = findIdx(['ubicac', 'ubi', 'posicion']);
-
-    if (idxLote === -1 || idxProducto === -1 || idxSistema === -1) {
-      throw new Error("No se encontraron todas las columnas clave (Lote, Producto, Sistema). Verifica los encabezados del Excel.");
-    }
-
-    // Saltamos las filas hasta llegar a los datos (después de la cabecera)
-    const rowsToInsert = values.slice(headerRowIndex + 1).map((row: any) => ({
-      lote: String(row[idxLote]).trim(), 
-      sku: String(row[idxProducto]).trim(),  
-      descripcion: idxDesc !== -1 ? String(row[idxDesc]).trim() : null,
-      ubicacion_sap: idxUbicacion !== -1 ? String(row[idxUbicacion]).trim() : null,
-      stock_sap: parseFloat(String(row[idxSistema]).replace(/,/g, '') || "0") || 0
-    })).filter((r: any) => r.lote !== "undefined" && r.lote !== "" && r.lote !== "null");
 
     // 4. Inserción de 5000 en 5000 a Supabase (PostgreSQL Plain Insert)
     const supabaseAdmin = createClient(

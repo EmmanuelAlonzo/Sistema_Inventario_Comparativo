@@ -41,7 +41,8 @@
       "expo-camera",
       "expo-location",
       "expo-notifications",
-      "expo-local-authentication"
+      "expo-local-authentication",
+      "expo-secure-store"
     ],
     "extra": {
       "eas": {

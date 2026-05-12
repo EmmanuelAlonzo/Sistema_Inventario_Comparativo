@@ -48,6 +48,7 @@ export default function CaptureScreen({ route, navigation }: any) {
 
       // Guardar directamente en Supabase (usando las columnas del esquema remoto)
       const { error } = await supabase.from('conteos_picking').insert({
+        sku: sku !== 'Desconocido' ? sku : null,
         lote: lote, // Se guarda usando el identificador único del lote
         cantidad_fisica: parseFloat(cantidad),
         ubicacion_fisica: ubicacionReal,
