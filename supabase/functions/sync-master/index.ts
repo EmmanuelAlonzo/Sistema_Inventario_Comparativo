@@ -147,6 +147,8 @@ serve(async (req: Request) => {
       const idxDesc = findIdx(['descrip', 'nombre', 'texto breve']);
       const idxSistema = findIdx(['sistema', 'stock', 'teorico', 'libre']);
       const idxUbicacion = findIdx(['ubicac', 'ubi', 'posicion']);
+      const idxCentro = findIdx(['centro']);
+      const idxAlmacen = findIdx(['almacen']);
 
       if (idxLote === -1 || idxProducto === -1 || idxSistema === -1) {
         console.warn(`Archivo [${spreadsheetName}] ignorado: No se encontraron todas las columnas clave.`);
@@ -161,9 +163,11 @@ serve(async (req: Request) => {
         const lote = String(row[idxLote] || "").trim();
         if (lote === "undefined" || lote === "" || lote === "null") continue;
 
-        const sku = String(row[idxProducto] || "").trim();
-        const descripcion = idxDesc !== -1 ? String(row[idxDesc] || "").trim() : null;
-        const ubicacion_sap = idxUbicacion !== -1 ? String(row[idxUbicacion] || "").trim() : null;
+        const sku = String(row[idxProducto] || "").trim() || null;
+        const descripcion = idxDesc !== -1 ? (String(row[idxDesc] || "").trim() || null) : null;
+        const ubicacion_sap = idxUbicacion !== -1 ? (String(row[idxUbicacion] || "").trim() || null) : null;
+        const centro = idxCentro !== -1 ? (String(row[idxCentro] || "").trim() || null) : null;
+        const almacen = idxAlmacen !== -1 ? (String(row[idxAlmacen] || "").trim() || null) : null;
         const stock_sap = parseFloat(String(row[idxSistema] || "").replace(/,/g, '') || "0") || 0;
 
         // La llave debe ser una combinación de SKU y Lote, ya que distintos SKUs pueden compartir el mismo Lote
@@ -174,16 +178,16 @@ serve(async (req: Request) => {
         if (existing) {
           if (isManipulatedDb) {
             // El archivo manipulado manda, sobreescribe los datos del crudo
-            mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, stock_sap, isManipulated: true });
+            mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, centro, almacen, stock_sap, isManipulated: true });
           } else {
             // Si el archivo actual es el crudo, solo lo guardamos si el existente NO es manipulado
             if (!existing.isManipulated) {
-              mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, stock_sap, isManipulated: false });
+              mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, centro, almacen, stock_sap, isManipulated: false });
             }
           }
         } else {
           // Si no existía, lo agregamos
-          mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, stock_sap, isManipulated: isManipulatedDb });
+          mergedRows.set(key, { lote, sku, descripcion, ubicacion_sap, centro, almacen, stock_sap, isManipulated: isManipulatedDb });
         }
       }
     }

@@ -7,12 +7,15 @@ const FILAS = ['A', 'B', 'C'];
 const NIVELES = ['1', '2', '3', '4', '5', '6'];
 
 export default function CaptureScreen({ route, navigation }: any) {
-  const lote = route.params?.lote || route.params?.sku || 'Desconocido';
-  const sku = route.params?.sku || 'Desconocido';
   const preloadedData = route.params?.data || null;
+  const initialSku = route.params?.sku || '';
+  const initialLote = route.params?.lote || route.params?.sku || '';
   const initialCantidad = route.params?.cantidad || '';
-  const descripcion = preloadedData?.descripcion || '';
   
+  const [sku, setSku] = useState(initialSku === 'Desconocido' ? '' : initialSku);
+  const [lote, setLote] = useState(initialLote === 'Desconocido' ? '' : initialLote);
+  const [descripcion, setDescripcion] = useState(preloadedData?.descripcion || '');
+
   const [cantidad, setCantidad] = useState(initialCantidad);
   const [nave, setNave] = useState('');
   const [fila, setFila] = useState('');
@@ -23,7 +26,7 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   useEffect(() => {
     const fetchStock = async () => {
-      if (!preloadedData && lote !== 'Desconocido') {
+      if (!preloadedData && lote && lote !== 'Desconocido') {
         try {
           const { data, error } = await supabase
             .from('inventario_maestro')
@@ -38,7 +41,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       }
     };
     fetchStock();
-  }, [lote]);
+  }, [lote, preloadedData]);
 
   const saveToDb = async (ubicacionReal: string, columnaStr: string) => {
     setLoading(true);
@@ -48,8 +51,9 @@ export default function CaptureScreen({ route, navigation }: any) {
 
       // Guardar directamente en Supabase (usando las columnas del esquema remoto)
       const { error } = await supabase.from('conteos_picking').insert({
-        sku: sku !== 'Desconocido' ? sku : null,
-        lote: lote, // Se guarda usando el identificador único del lote
+        sku: sku || null,
+        lote: lote || null,
+        descripcion: descripcion || null, // Agregado para guardar la descripción manual
         cantidad_fisica: parseFloat(cantidad),
         ubicacion_fisica: ubicacionReal,
         timestamp,
@@ -97,11 +101,30 @@ export default function CaptureScreen({ route, navigation }: any) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
       <View style={styles.headerPanel}>
-        <Text style={styles.loteText}>Producto:</Text>
-        <Text style={styles.loteValue}>{sku}</Text>
-        {descripcion ? <Text style={styles.descText}>{descripcion}</Text> : null}
+        <Text style={styles.loteText}>Producto (SKU):</Text>
+        <TextInput 
+          style={styles.editableInput} 
+          value={sku} 
+          onChangeText={setSku} 
+          placeholder="Ingrese SKU"
+          placeholderTextColor="#666"
+        />
+        <Text style={[styles.loteText, {marginTop: 10}]}>Descripción:</Text>
+        <TextInput 
+          style={styles.editableInputSmall} 
+          value={descripcion} 
+          onChangeText={setDescripcion} 
+          placeholder="Descripción (opcional)"
+          placeholderTextColor="#666"
+        />
         <Text style={[styles.loteText, {marginTop: 10}]}>Lote / Embarque:</Text>
-        <Text style={[styles.loteValue, {fontSize: 20}]}>{lote}</Text>
+        <TextInput 
+          style={styles.editableInput} 
+          value={lote} 
+          onChangeText={setLote} 
+          placeholder="Ingrese Lote"
+          placeholderTextColor="#666"
+        />
       </View>
       
       <View style={styles.formCard}>
@@ -193,6 +216,32 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 2,
     marginTop: 5,
+  },
+  editableInput: {
+    backgroundColor: '#1E1E1E',
+    color: '#00ffcc',
+    fontSize: 22,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#444',
+    textAlign: 'center',
+    fontWeight: 'bold',
+    width: '100%',
+    marginTop: 5,
+  },
+  editableInputSmall: {
+    backgroundColor: '#1E1E1E',
+    color: '#fff',
+    fontSize: 16,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#444',
+    textAlign: 'center',
+    width: '100%',
+    marginTop: 5,
+    fontStyle: 'italic',
   },
   descText: {
     color: '#00ffcc',

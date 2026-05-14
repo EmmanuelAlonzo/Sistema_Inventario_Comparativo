@@ -70,19 +70,43 @@ serve(async (req: Request) => {
 
     // --- Lógica de Procesamiento ---
     
-    // 1. Mapa de conteos físicos por LOTE
+    // 1. Mapa de conteos físicos por SKU + LOTE
     const physicalByLot: Record<string, number> = {};
     picking?.forEach(p => {
-      if (!physicalByLot[p.lote]) physicalByLot[p.lote] = 0;
-      physicalByLot[p.lote] += p.cantidad_fisica || 0;
+      // Usar SKU real si existe en picking, sino usar una cadena vacía o "SIN_SKU"
+      // Para retrocompatibilidad si la columna sku aún está vacía, usamos el lote como fallback o solo agrupamos por lote.
+      // Pero lo ideal es: sku_lote
+      const skuKey = p.sku ? String(p.sku).trim() : "SIN_SKU";
+      const loteKey = p.lote ? String(p.lote).trim() : "SIN_LOTE";
+      const compositeKey = `${skuKey}_${loteKey}`;
+      
+      if (!physicalByLot[compositeKey]) physicalByLot[compositeKey] = 0;
+      physicalByLot[compositeKey] += p.cantidad_fisica || 0;
     });
 
     // 2. Preparar DATA_LOTES y Acumular para DATA_PRODUCTOS
-    const reportLotes = [["Producto (SKU)", "Descripción", "Lote", "Ubicación SAP", "Stock SAP", "Conteo App", "Diferencia"]];
+    const reportLotes = [["Producto (SKU)", "Descripción", "Lote", "Centro", "Almacen", "Ubicación SAP", "Stock SAP", "Conteo App", "Diferencia"]];
     const productAgg: Record<string, { desc: string, sap: number, fisico: number }> = {};
 
+    // Mantener un registro de los composite keys encontrados en maestro
+    const maestroKeys = new Set<string>();
+
     maestro?.forEach(m => {
-      const fisico = physicalByLot[m.lote] || 0;
+      const mSku = m.sku ? String(m.sku).trim() : "SIN_SKU";
+      const mLote = m.lote ? String(m.lote).trim() : "SIN_LOTE";
+      const compositeKey = `${mSku}_${mLote}`;
+      maestroKeys.add(compositeKey);
+
+      // Buscar si hay conteo físico usando el compositeKey exacto.
+      // Si la app vieja guardó sin SKU, la key será "SIN_SKU_lote". Si es así, tratamos de recuperar por lote si no hay match exacto.
+      let fisico = physicalByLot[compositeKey] || 0;
+      
+      // Fallback temporal si el picking no guardó SKU pero el maestro sí lo tiene
+      if (fisico === 0 && physicalByLot[`SIN_SKU_${mLote}`]) {
+         fisico = physicalByLot[`SIN_SKU_${mLote}`];
+         // Para evitar que se asigne a múltiples SKUs, podríamos vaciarlo, 
+         // pero por ahora lo dejamos para que no pierdan la cuenta vieja.
+      }
       const diferencia = fisico - (m.stock_sap || 0);
       
       // Detalle por Lote
@@ -90,6 +114,8 @@ serve(async (req: Request) => {
         m.sku || "",
         m.descripcion || "",
         m.lote,
+        m.centro || "",
+        m.almacen || "",
         m.ubicacion_sap || "",
         String(m.stock_sap || 0),
         String(fisico),
@@ -105,28 +131,45 @@ serve(async (req: Request) => {
       productAgg[sku].fisico += fisico;
     });
 
-    // 3. Identificar Lotes escaneados que NO están en el maestro
-    const maestroLotes = new Set(maestro?.map(m => m.lote));
-
+    // 3. Identificar combinaciones (SKU+LOTE) escaneadas que NO están en el maestro
     picking?.forEach(p => {
-      if (!maestroLotes.has(p.lote)) {
-        const loteKey = p.lote || "Desconocido";
-        const skuKey = p.sku || ""; // Si no hay SKU real, dejarlo en blanco
-        
-        reportLotes.push([
-          skuKey, // Mostrar el SKU real en la primera columna (o en blanco)
-          "Código no registrado en SAP", 
-          loteKey, 
-          p.ubicacion_fisica || "N/A", 
-          0, // Enviar como número
-          p.cantidad_fisica || 0, // Enviar como número
-          p.cantidad_fisica || 0 // Enviar como número
-        ]);
-        
-        // Sumar al producto correspondiente usando el SKU real (si existe) o un placeholder
-        const aggKey = skuKey || "NUEVO";
-        if (!productAgg[aggKey]) productAgg[aggKey] = { desc: "Código no registrado en SAP", sap: 0, fisico: 0 };
-        productAgg[aggKey].fisico += (p.cantidad_fisica || 0);
+      const pSku = p.sku ? String(p.sku).trim() : "SIN_SKU";
+      const pLote = p.lote ? String(p.lote).trim() : "SIN_LOTE";
+      const compositeKey = `${pSku}_${pLote}`;
+
+      // Si no existe ni como match exacto ni como fallback de SIN_SKU
+      if (!maestroKeys.has(compositeKey)) {
+        // Verificar si es un picking viejo sin SKU que ya fue asimilado por un lote del maestro
+        let asimilado = false;
+        if (pSku === "SIN_SKU") {
+           for (const mk of maestroKeys) {
+              if (mk.endsWith(`_${pLote}`)) {
+                 asimilado = true;
+                 break;
+              }
+           }
+        }
+
+        if (!asimilado) {
+          const skuKey = p.sku || "NUEVO";
+          const loteKey = p.lote || "Desconocido";
+          const descKey = p.descripcion || ""; // Usar la descripción ingresada o dejar en blanco
+          
+          reportLotes.push([
+            skuKey, 
+            descKey, 
+            loteKey, 
+            "N/A", // Centro desconocido
+            "N/A", // Almacen desconocido
+            p.ubicacion_fisica || "N/A", 
+            0, 
+            p.cantidad_fisica || 0, 
+            p.cantidad_fisica || 0 
+          ]);
+          
+          if (!productAgg[skuKey]) productAgg[skuKey] = { desc: descKey, sap: 0, fisico: 0 };
+          productAgg[skuKey].fisico += (p.cantidad_fisica || 0);
+        }
       }
     });
 
