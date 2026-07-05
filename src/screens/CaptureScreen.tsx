@@ -53,11 +53,12 @@ export default function CaptureScreen({ route, navigation }: any) {
       const { error } = await supabase.from('conteos_picking').insert({
         sku: sku || null,
         lote: lote || null,
-        descripcion: descripcion || null, // Agregado para guardar la descripción manual
+        descripcion: descripcion || null,
         cantidad_fisica: parseFloat(cantidad),
         ubicacion_fisica: ubicacionReal,
         timestamp,
-        sincronizado_drive: true 
+        operador_id: null,
+        sincronizado_drive: false
       });
       
       if (error) throw error;

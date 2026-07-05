@@ -71,24 +71,14 @@ export default function ScanScreen({ navigation }: any) {
         data = res.data;
         error = res.error;
       } else {
-        // 2. Búsqueda simple: Primero intentar por SKU
-        const resSku = await supabase
+        // Búsqueda simple optimizada: ejecuta la consulta de SKU o Lote en un solo viaje de red
+        const { data: resData, error: resError } = await supabase
           .from('inventario_maestro')
           .select('*')
-          .eq('sku', rawInput);
+          .or(`sku.eq.${rawInput},lote.eq.${rawInput}`);
         
-        if (resSku.data && resSku.data.length > 0) {
-          data = resSku.data;
-          error = resSku.error;
-        } else {
-          // 3. Si no existe como SKU, entonces buscamos como Lote
-          const resLote = await supabase
-            .from('inventario_maestro')
-            .select('*')
-            .eq('lote', rawInput);
-          data = resLote.data;
-          error = resLote.error;
-        }
+        data = resData;
+        error = resError;
       }
         
       if (data && data.length > 0) {

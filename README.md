@@ -22,11 +22,15 @@ Este sistema está diseñado para la validación masiva de inventarios industria
 - **Validación de Discrepancias:** Alerta visual inmediata si el conteo físico no coincide con el sistema SAP.
 - **Limpieza de Ciclo:** Función para borrar datos locales y de nube al inicio de un nuevo periodo de inventario.
 
-### 3. Reporte Automático
-- Genera un archivo en Google Drive llamado `RESULTADOS_INVENTARIO`.
-- **Pestaña DASHBOARD:** Resumen ejecutivo con KPIs de precisión y gráficas de discrepancias.
-- **Pestaña DATA_LOTES:** Detalle línea por línea con las diferencias calculadas.
-- **Pestaña DATA_PRODUCTOS:** Resumen agrupado por SKU.
+### 3. Reporte Automático y Estilizado
+- Genera y actualiza dinámicamente un archivo en Google Drive llamado `RESULTADOS_INVENTARIO`.
+- **Pestaña DASHBOARD:** Resumen ejecutivo con KPIs de precisión de inventario y gráficas automáticas de discrepancias.
+- **Pestaña DATA_LOTES:** Detalle línea por línea con las diferencias calculadas, encabezados corporativos oscuros, alineación optimizada y formato condicional (celdas en rojo suave si la diferencia es negativa).
+- **Pestaña DATA_PRODUCTOS:** Resumen agrupado por SKU con los mismos estándares visuales profesionales y formato condicional.
+
+### 4. Flujo de Datos Optimizado (Directo a la Nube)
+- **Consultas Atómicas:** La búsqueda simple de SKU o Lote en el escáner se ejecuta en un solo viaje de red mediante consultas `.or()`.
+- **Exportación Eficiente:** La Edge Function `export-results` ya no descarga la totalidad del maestro SAP. En su lugar, aplica filtros inteligentes para descargar únicamente los registros con stock activo o aquellos lotes que interactuaron con los conteos físicos.
 
 ---
 

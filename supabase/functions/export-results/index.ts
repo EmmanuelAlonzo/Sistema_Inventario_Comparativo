@@ -46,27 +46,26 @@ serve(async (req: Request) => {
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
 
-    // 1. Obtener datos de Supabase (con paginación para inventario_maestro)
-    let maestro: any[] = [];
-    let page = 0;
-    const pageSize = 1000;
-    
-    while (true) {
-      const { data, error } = await supabaseAdmin
-        .from('inventario_maestro')
-        .select('*')
-        .range(page * pageSize, (page + 1) * pageSize - 1);
-        
-      if (error) throw new Error("Error obteniendo maestro: " + error.message);
-      if (!data || data.length === 0) break;
-      
-      maestro.push(...data);
-      if (data.length < pageSize) break;
-      page++;
-    }
-
-    const { data: picking, error: pickingErr } = await supabaseAdmin.from('conteos_picking').select('*');
+    // 1. Obtener datos optimizados de Supabase
+    // Traemos todo el picking directamente
+    const { data: picking, error: pickingErr } = await supabaseAdmin
+      .from('conteos_picking')
+      .select('*');
     if (pickingErr) throw new Error("Error obteniendo picking.");
+
+    // Extraemos los lotes únicos que realmente se contaron para no pedir todo el maestro
+    const lotesContados = picking ? [...new Set(picking.map((p: any) => p.lote).filter(Boolean))] : [];
+
+    // Traemos del maestro solo lo que tiene stock en SAP > 0 O los lotes que los operarios escanearon
+    const orFilter = lotesContados.length > 0 
+      ? `stock_sap.gt.0,lote.in.(${lotesContados.join(',')})`
+      : 'stock_sap.gt.0';
+
+    const { data: maestro, error: maestroErr } = await supabaseAdmin
+      .from('inventario_maestro')
+      .select('*')
+      .or(orFilter);
+    if (maestroErr) throw new Error("Error obteniendo maestro optimizado: " + maestroErr.message);
 
     // --- Lógica de Procesamiento ---
     
@@ -288,27 +287,140 @@ serve(async (req: Request) => {
 
     await updateSheet("DASHBOARD", dashValues);
 
-    // 8. Gráfica en DASHBOARD
-    const chartReq = [{
-      addChart: {
-        chart: {
-          spec: {
-            title: "Top 20 Discrepancias de Inventario",
-            basicChart: {
-              chartType: "COLUMN",
-              axis: [{ position: "BOTTOM_AXIS", title: "SKU" }, { position: "LEFT_AXIS", title: "Diferencia" }],
-              domains: [{ domain: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 21, endRowIndex: 21 + topDiffs.length, startColumnIndex: 0, endColumnIndex: 1 }] } } }],
-              series: [{ series: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 21, endRowIndex: 21 + topDiffs.length, startColumnIndex: 1, endColumnIndex: 2 }] } }, targetAxis: "LEFT_AXIS" }]
+    // 8. Aplicar estilos, cuadrículas, formatos condicionales y gráfica en DASHBOARD
+    const stylingAndChartRequests: any[] = [
+      // Asegurar cuadrículas activas (hideGridlines: false) en todas las hojas
+      {
+        updateSheetProperties: {
+          properties: { sheetId: dashboardSheetId, gridProperties: { hideGridlines: false } },
+          fields: "gridProperties.hideGridlines"
+        }
+      },
+      {
+        updateSheetProperties: {
+          properties: { sheetId: lotesSheetId, gridProperties: { hideGridlines: false } },
+          fields: "gridProperties.hideGridlines"
+        }
+      },
+      {
+        updateSheetProperties: {
+          properties: { sheetId: productosSheetId, gridProperties: { hideGridlines: false } },
+          fields: "gridProperties.hideGridlines"
+        }
+      },
+      // Encabezados DATA_LOTES (Gris oscuro, texto blanco negrita)
+      {
+        repeatCell: {
+          range: { sheetId: lotesSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 9 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.12, green: 0.12, blue: 0.12 },
+              textFormat: { foregroundColor: { red: 1.0, green: 1.0, blue: 1.0 }, bold: true }
             }
           },
-          position: { overlayPosition: { anchorCell: { sheetId: dashboardSheetId, rowIndex: 2, columnIndex: 3 }, widthPixels: 750, heightPixels: 400 } }
+          fields: "userEnteredFormat(backgroundColor,textFormat)"
+        }
+      },
+      // Encabezados DATA_PRODUCTOS (Gris oscuro, texto blanco negrita)
+      {
+        repeatCell: {
+          range: { sheetId: productosSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 5 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.12, green: 0.12, blue: 0.12 },
+              textFormat: { foregroundColor: { red: 1.0, green: 1.0, blue: 1.0 }, bold: true }
+            }
+          },
+          fields: "userEnteredFormat(backgroundColor,textFormat)"
+        }
+      },
+      // Alineaciones DATA_LOTES: Centrar SKU (Columna A, index 0) y Lote (Columna C, index 2)
+      {
+        repeatCell: {
+          range: { sheetId: lotesSheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: lotesSheetId, startRowIndex: 1, startColumnIndex: 2, endColumnIndex: 3 },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      // Alineaciones DATA_LOTES: Alinear a la derecha cantidades numéricas (SAP, Conteo, Diferencia -> Columnas G a I, index 6 a 9)
+      {
+        repeatCell: {
+          range: { sheetId: lotesSheetId, startRowIndex: 1, startColumnIndex: 6, endColumnIndex: 9 },
+          cell: { userEnteredFormat: { horizontalAlignment: "RIGHT" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      // Alineaciones DATA_PRODUCTOS: Centrar SKU (Columna A, index 0)
+      {
+        repeatCell: {
+          range: { sheetId: productosSheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      // Alineaciones DATA_PRODUCTOS: Alinear a la derecha cantidades (SAP, Conteo, Diferencia -> Columnas C a E, index 2 a 5)
+      {
+        repeatCell: {
+          range: { sheetId: productosSheetId, startRowIndex: 1, startColumnIndex: 2, endColumnIndex: 5 },
+          cell: { userEnteredFormat: { horizontalAlignment: "RIGHT" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      // Formato condicional en DATA_LOTES: Diferencia (Columna I, index 8) < 0 -> Fondo Rojo Suave
+      {
+        addConditionalFormatRule: {
+          rule: {
+            ranges: [{ sheetId: lotesSheetId, startRowIndex: 1, startColumnIndex: 8, endColumnIndex: 9 }],
+            booleanRule: {
+              condition: { type: "NUMBER_LESS", values: [{ userEnteredValue: "0" }] },
+              format: { backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 } }
+            }
+          },
+          index: 0
+        }
+      },
+      // Formato condicional en DATA_PRODUCTOS: Diferencia Neta (Columna E, index 4) < 0 -> Fondo Rojo Suave
+      {
+        addConditionalFormatRule: {
+          rule: {
+            ranges: [{ sheetId: productosSheetId, startRowIndex: 1, startColumnIndex: 4, endColumnIndex: 5 }],
+            booleanRule: {
+              condition: { type: "NUMBER_LESS", values: [{ userEnteredValue: "0" }] },
+              format: { backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 } }
+            }
+          },
+          index: 0
+        }
+      },
+      // Gráfica en DASHBOARD
+      {
+        addChart: {
+          chart: {
+            spec: {
+              title: "Top 20 Discrepancias de Inventario",
+              basicChart: {
+                chartType: "COLUMN",
+                axis: [{ position: "BOTTOM_AXIS", title: "SKU" }, { position: "LEFT_AXIS", title: "Diferencia" }],
+                domains: [{ domain: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 21, endRowIndex: 21 + topDiffs.length, startColumnIndex: 0, endColumnIndex: 1 }] } } }],
+                series: [{ series: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 21, endRowIndex: 21 + topDiffs.length, startColumnIndex: 1, endColumnIndex: 2 }] } }, targetAxis: "LEFT_AXIS" }]
+              }
+            },
+            position: { overlayPosition: { anchorCell: { sheetId: dashboardSheetId, rowIndex: 2, columnIndex: 3 }, widthPixels: 750, heightPixels: 400 } }
+          }
         }
       }
-    }];
+    ];
 
     await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
       method: "POST", headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ requests: chartReq })
+      body: JSON.stringify({ requests: stylingAndChartRequests })
     });
 
     return new Response(JSON.stringify({ 
