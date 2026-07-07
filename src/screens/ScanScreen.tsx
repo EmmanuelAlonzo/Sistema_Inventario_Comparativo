@@ -5,7 +5,8 @@ import ZebraScanner from '../components/Scanner/ZebraScanner';
 import CameraScanner from '../components/Scanner/CameraScanner';
 import * as Device from 'expo-device';
 
-export default function ScanScreen({ navigation }: any) {
+export default function ScanScreen({ route, navigation }: any) {
+  const { nave, seccion, numero, asignacionId } = route.params || {};
   const [scannedSku, setScannedSku] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
@@ -25,7 +26,11 @@ export default function ScanScreen({ navigation }: any) {
       sku: item.sku, 
       lote: item.lote, 
       data: item, 
-      cantidad: cantidadExtraida 
+      cantidad: cantidadExtraida,
+      nave,
+      seccion,
+      numero,
+      asignacionId
     });
   };
 
@@ -101,7 +106,11 @@ export default function ScanScreen({ navigation }: any) {
             navigation.navigate('Capture', { 
               sku: queryProducto || rawInput, 
               lote: queryLote || rawInput, 
-              cantidad: cantidadExtraida 
+              cantidad: cantidadExtraida,
+              nave,
+              seccion,
+              numero,
+              asignacionId
             }) 
           } 
         }
@@ -110,6 +119,43 @@ export default function ScanScreen({ navigation }: any) {
       setLoading(false);
       setScannedSku(''); // Limpiar para el siguiente escaneo
     }
+  };
+
+  const handleFinalizeConteo = async () => {
+    if (!asignacionId) {
+      Alert.alert('Error', 'No hay una asignación activa.');
+      return;
+    }
+    Alert.alert(
+      'Finalizar Conteo de Ubicación',
+      `¿Estás seguro de finalizar el conteo en esta ubicación (Nave ${nave}, Sección ${seccion}, Número ${numero})?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sí, Finalizar',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const { error } = await supabase
+                .from('asignaciones_conteo')
+                .update({ estado: 'completada' })
+                .eq('id', asignacionId);
+
+              if (error) throw error;
+
+              Alert.alert('Ubicación Finalizada', 'La ubicación ha sido marcada como completada.', [
+                { text: 'OK', onPress: () => navigation.goBack() }
+              ]);
+            } catch (e: any) {
+              Alert.alert('Error', 'No se pudo finalizar la ubicación: ' + e.message);
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
   return (
@@ -139,6 +185,20 @@ export default function ScanScreen({ navigation }: any) {
           {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.manualButtonText}>BUSCAR AHORA</Text>}
         </TouchableOpacity>
       </View>
+
+      {asignacionId && (
+        <TouchableOpacity 
+          style={styles.finalizeButton} 
+          onPress={handleFinalizeConteo}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.finalizeButtonText}>Finalizar Conteo de Ubicación</Text>
+          )}
+        </TouchableOpacity>
+      )}
 
       {/* Modal de Selección de Lote */}
       <Modal visible={showModal} transparent animationType="slide">
@@ -296,5 +356,27 @@ const styles = StyleSheet.create({
   closeButtonText: {
     color: '#ff4444',
     fontWeight: 'bold'
+  },
+  finalizeButton: {
+    backgroundColor: '#ff3333',
+    padding: 18,
+    borderRadius: 10,
+    alignItems: 'center',
+    width: '90%',
+    marginTop: 20,
+    borderWidth: 2,
+    borderColor: '#ff6666',
+    shadowColor: '#ff3333',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 5,
+    elevation: 6,
+  },
+  finalizeButtonText: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 16,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
   }
 });

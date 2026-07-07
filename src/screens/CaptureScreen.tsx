@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { supabase } from '../services/supabase';
+import { useAuth } from '../context/AuthContext';
 
 const NAVES = ['201', '202', '203', '204', '205', '206', '207', '208', '209', '210'];
 const FILAS = ['A', 'B', 'C'];
 const NIVELES = ['1', '2', '3', '4', '5', '6'];
 
 export default function CaptureScreen({ route, navigation }: any) {
+  const { user } = useAuth();
   const preloadedData = route.params?.data || null;
   const initialSku = route.params?.sku || '';
   const initialLote = route.params?.lote || route.params?.sku || '';
@@ -17,9 +19,9 @@ export default function CaptureScreen({ route, navigation }: any) {
   const [descripcion, setDescripcion] = useState(preloadedData?.descripcion || '');
 
   const [cantidad, setCantidad] = useState(initialCantidad);
-  const [nave, setNave] = useState('');
-  const [fila, setFila] = useState('');
-  const [nivel, setNivel] = useState('');
+  const [nave, setNave] = useState(route.params?.nave || '');
+  const [fila, setFila] = useState(route.params?.seccion || '');
+  const [nivel, setNivel] = useState(route.params?.numero ? parseInt(route.params.numero, 10).toString() : '');
   
   const [stockSap, setStockSap] = useState<number | null>(preloadedData?.stock_sap || null);
   const [loading, setLoading] = useState(false);
@@ -57,7 +59,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         cantidad_fisica: parseFloat(cantidad),
         ubicacion_fisica: ubicacionReal,
         timestamp,
-        operador_id: null,
+        operador_id: user ? user.codigo_empleado : null,
         sincronizado_drive: false
       });
       
@@ -154,7 +156,7 @@ export default function CaptureScreen({ route, navigation }: any) {
 
         <View style={styles.rowLayout}>
           <View style={{ flex: 1, marginRight: 10 }}>
-            <Text style={styles.label}>3. Fila</Text>
+            <Text style={styles.label}>3. Sección</Text>
             <View style={styles.rowContainer}>
               {FILAS.map(f => (
                 <TouchableOpacity 
@@ -169,7 +171,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           </View>
           
           <View style={{ flex: 1.5 }}>
-            <Text style={styles.label}>4. Nivel (001 - 006)</Text>
+            <Text style={styles.label}>4. Número (001 - 006)</Text>
             <View style={styles.rowContainerWrap}>
               {NIVELES.map(niv => (
                 <TouchableOpacity 

@@ -46,26 +46,30 @@ serve(async (req: Request) => {
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
 
-    // 1. Obtener datos optimizados de Supabase
-    // Traemos todo el picking directamente
+    // 1. Obtener todo el picking directamente
     const { data: picking, error: pickingErr } = await supabaseAdmin
       .from('conteos_picking')
       .select('*');
     if (pickingErr) throw new Error("Error obteniendo picking.");
 
-    // Extraemos los lotes únicos que realmente se contaron para no pedir todo el maestro
-    const lotesContados = picking ? [...new Set(picking.map((p: any) => p.lote).filter(Boolean))] : [];
-
-    // Traemos del maestro solo lo que tiene stock en SAP > 0 O los lotes que los operarios escanearon
-    const orFilter = lotesContados.length > 0 
-      ? `stock_sap.gt.0,lote.in.(${lotesContados.join(',')})`
-      : 'stock_sap.gt.0';
-
-    const { data: maestro, error: maestroErr } = await supabaseAdmin
-      .from('inventario_maestro')
-      .select('*')
-      .or(orFilter);
-    if (maestroErr) throw new Error("Error obteniendo maestro optimizado: " + maestroErr.message);
+    // 2. Obtener el maestro completo de SAP superando el límite de 1000 filas
+    let maestro: any[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    
+    while (true) {
+      const { data, error } = await supabaseAdmin
+        .from('inventario_maestro')
+        .select('*')
+        .range(page * pageSize, (page + 1) * pageSize - 1);
+        
+      if (error) throw new Error("Error obteniendo maestro: " + error.message);
+      if (!data || data.length === 0) break;
+      
+      maestro.push(...data);
+      if (data.length < pageSize) break;
+      page++;
+    }
 
     // --- Lógica de Procesamiento ---
     
@@ -185,6 +189,21 @@ serve(async (req: Request) => {
       ]);
     });
 
+    // Preparar CONTEOS_REALES (Origen directo de la App)
+    const reportConteosReales: any[][] = [
+      ["Producto (SKU)", "Descripción", "Lote", "Ubicación Física App", "Cantidad Física", "Fecha/Hora Conteo"]
+    ];
+    picking?.forEach((p: any) => {
+      reportConteosReales.push([
+        p.sku || "SIN_SKU",
+        p.descripcion || "",
+        p.lote || "SIN_LOTE",
+        p.ubicacion_fisica || "",
+        p.cantidad_fisica || 0,
+        p.timestamp || p.created_at || ""
+      ]);
+    });
+
     // 4. Drive Autodiscovery
     const query = `mimeType='application/vnd.google-apps.spreadsheet' and name contains 'RESULTADOS_INVENTARIO' and trashed=false`;
     const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`, {
@@ -202,6 +221,7 @@ serve(async (req: Request) => {
     let dashboardSheetId = metaData.sheets[0].properties.sheetId;
     let lotesSheetId = metaData.sheets.find((s: any) => s.properties.title === 'DATA_LOTES')?.properties.sheetId;
     let productosSheetId = metaData.sheets.find((s: any) => s.properties.title === 'DATA_PRODUCTOS')?.properties.sheetId;
+    let conteosRealesSheetId = metaData.sheets.find((s: any) => s.properties.title === 'CONTEOS_REALES')?.properties.sheetId;
 
     const setupRequests = [];
     if (metaData.sheets[0].properties.title !== 'DASHBOARD') {
@@ -234,6 +254,7 @@ serve(async (req: Request) => {
 
     if (!lotesSheetId) setupRequests.push({ addSheet: { properties: { title: "DATA_LOTES" } } });
     if (!productosSheetId) setupRequests.push({ addSheet: { properties: { title: "DATA_PRODUCTOS" } } });
+    if (!conteosRealesSheetId) setupRequests.push({ addSheet: { properties: { title: "CONTEOS_REALES" } } });
     
     // Limpiar gráficos viejos
     if (metaData.sheets[0].charts) {
@@ -250,34 +271,136 @@ serve(async (req: Request) => {
       const m2 = await r2.json();
       lotesSheetId = m2.sheets.find((s: any) => s.properties.title === 'DATA_LOTES').properties.sheetId;
       productosSheetId = m2.sheets.find((s: any) => s.properties.title === 'DATA_PRODUCTOS').properties.sheetId;
+      conteosRealesSheetId = m2.sheets.find((s: any) => s.properties.title === 'CONTEOS_REALES').properties.sheetId;
     }
 
     // 6. Inyectar Datos y Limpiar Pestañas
-    const clearSheets = async (name: string) => fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${name}!A1:Z40000:clear`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } });
+    const clearSheets = async (name: string) => {
+      const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${name}!A1:Z40000:clear`, { 
+        method: "POST", 
+        headers: { Authorization: `Bearer ${accessToken}` } 
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Error limpiando pestaña ${name}: ${txt}`);
+      }
+    };
     await clearSheets("DATA_LOTES");
     await clearSheets("DATA_PRODUCTOS");
+    await clearSheets("CONTEOS_REALES");
     await clearSheets("DASHBOARD");
 
-    const updateSheet = async (name: string, vals: any[][]) => fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${name}!A1?valueInputOption=RAW`, {
-      method: "PUT", headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ range: `${name}!A1`, majorDimension: "ROWS", values: vals })
-    });
+    const updateSheet = async (name: string, vals: any[][]) => {
+      const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${name}!A1?valueInputOption=RAW`, {
+        method: "PUT", 
+        headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ range: `${name}!A1`, majorDimension: "ROWS", values: vals })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Error actualizando pestaña ${name}: ${txt}`);
+      }
+    };
 
     await updateSheet("DATA_LOTES", reportLotes);
     await updateSheet("DATA_PRODUCTOS", reportProductos);
+    await updateSheet("CONTEOS_REALES", reportConteosReales);
 
     // 7. KPIs y Dashboard (Sobre DATA_PRODUCTOS)
     const diffProdCount = reportProductos.slice(1).filter(r => Number(r[4]) !== 0).length;
-    const dashValues: (string | number)[][] = [
-      ["📊 RESUMEN EJECUTIVO (VALIDACIÓN LIMPIA)"],
-      ["Fecha de Generación:", new Date().toLocaleDateString()],
-      [""],
-      ["Total de SKUs en Inventario:", String(reportProductos.length - 1)],
-      ["Productos con Diferencia Real:", String(diffProdCount)],
-      ["Precisión General:", (reportProductos.length > 1) ? String((( (reportProductos.length - 1) - diffProdCount) / (reportProductos.length - 1) * 100).toFixed(2)) + "%" : "0%"],
-      [""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],[""],
-      ["TOP DISCREPANCIAS POR PRODUCTO"],
-      ["Producto (SKU)", "Diferencia Neta"]
+    const precisionVal = (reportProductos.length > 1) 
+      ? ((reportProductos.length - 1 - diffProdCount) / (reportProductos.length - 1))
+      : 0;
+
+    // --- PROCESAMIENTO LOGÍSTICO Y MATEMÁTICO (KPIs) ---
+
+    // KPI 2 (Avance): % de SKUs únicos de 'inventario_maestro' que ya existen en 'conteos_picking'
+    const uniqueMasterSkus = new Set(maestro.map((m: any) => m.sku).filter(Boolean));
+    const uniquePickingSkus = new Set(picking?.map((p: any) => p.sku).filter(Boolean));
+    let countExist = 0;
+    uniqueMasterSkus.forEach(sku => {
+      if (uniquePickingSkus.has(sku)) countExist++;
+    });
+    const kpiAvance = uniqueMasterSkus.size > 0 ? (countExist / uniqueMasterSkus.size) : 0;
+
+    // KPI 3 (Sobrantes vs Faltantes) y KPI 6 (Exactitud Absoluta)
+    let kpiSobrantes = 0;
+    let kpiFaltantes = 0;
+    let kpiCuadrados = 0;
+    reportLotes.slice(1).forEach(row => {
+      const diff = Number(row[8]);
+      if (diff > 0) kpiSobrantes++;
+      else if (diff < 0) kpiFaltantes++;
+      else kpiCuadrados++;
+    });
+
+    const kpiExactitud = reportLotes.length > 1 ? (kpiCuadrados / (reportLotes.length - 1)) : 0;
+
+    // KPI 8 (Top 5 Ubicaciones Desordenadas): Agrupar absolute differences por ubicacion_sap
+    const ubiDiffs: Record<string, number> = {};
+    reportLotes.slice(1).forEach(row => {
+      const ubi = row[5] || "N/A";
+      const diffAbs = Math.abs(Number(row[8]));
+      if (!ubiDiffs[ubi]) ubiDiffs[ubi] = 0;
+      ubiDiffs[ubi] += diffAbs;
+    });
+    const topUbis = Object.entries(ubiDiffs)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+
+    // KPI 9 (Efecto Espejo/Cruces de Lotes): SKU + Almacen has both positive and negative diffs
+    const skuAlmacenDiffs: Record<string, { positive: boolean, negative: boolean }> = {};
+    reportLotes.slice(1).forEach(row => {
+      const sku = row[0];
+      const almacen = row[4] || "N/A";
+      const diff = Number(row[8]);
+      const key = `${sku}_${almacen}`;
+      if (!skuAlmacenDiffs[key]) {
+        skuAlmacenDiffs[key] = { positive: false, negative: false };
+      }
+      if (diff > 0) skuAlmacenDiffs[key].positive = true;
+      if (diff < 0) skuAlmacenDiffs[key].negative = true;
+    });
+    let kpiEfectoEspejo = 0;
+    Object.values(skuAlmacenDiffs).forEach(val => {
+      if (val.positive && val.negative) {
+        kpiEfectoEspejo++;
+      }
+    });
+
+    // KPI 12 (Conflictos Multiusuario): lotes with > 1 counts in picking with different quantities
+    const lotPickingQty: Record<string, Set<number>> = {};
+    picking?.forEach((p: any) => {
+      const lote = p.lote;
+      if (!lote) return;
+      if (!lotPickingQty[lote]) {
+        lotPickingQty[lote] = new Set<number>();
+      }
+      lotPickingQty[lote].add(Number(p.cantidad_fisica || 0));
+    });
+    let kpiConflictosMultiusuario = 0;
+    Object.values(lotPickingQty).forEach(qtys => {
+      if (qtys.size > 1) {
+        kpiConflictosMultiusuario++;
+      }
+    });
+
+    const dashValues: any[][] = [
+      ["REPORTE EJECUTIVO DE CONTROL DE INVENTARIO"], // Index 0 (Row 1)
+      ["Fecha de Generación: " + new Date().toLocaleDateString()], // Index 1 (Row 2)
+      [""], // Index 2 (Row 3)
+      [""], // Index 3 (Row 4)
+      ["", "", "", "", "", "", ""], // Index 4 (Row 5)
+      ["", "", "", "", "", "", ""], // Index 5 (Row 6)
+      ["", "", "", "", "", "", ""], // Index 6 (Row 7)
+      ["", "", "", "", "", "", ""], // Index 7 (Row 8)
+      ["", "", "", "", "", "", ""], // Index 8 (Row 9)
+      ["", "", "", "", "", "", ""], // Index 9 (Row 10)
+      ["", "", "", "", "", "", ""], // Index 10 (Row 11)
+      ["", "", "", "", "", "", ""], // Index 11 (Row 12)
+      [""], // Index 12 (Row 13)
+      ["TOP 20 DISCREPANCIAS POR PRODUCTO"], // Index 13 (Row 14)
+      ["Producto (SKU)", "Diferencia Neta"] // Index 14 (Row 15)
     ];
 
     const topDiffs = reportProductos.slice(1)
@@ -285,15 +408,34 @@ serve(async (req: Request) => {
       .slice(0, 20);
     topDiffs.forEach(t => dashValues.push([t[0], t[4]]));
 
+    // Append spacer and Top 5 Ubicaciones Desordenadas (KPI 8)
+    dashValues.push([""]); // Row 36 (Index 35)
+    dashValues.push(["TOP 5 UBICACIONES CON DESCUADRE"]); // Row 37 (Index 36)
+    dashValues.push(["Ubicación SAP", "Descuadre Absoluto"]); // Row 38 (Index 37)
+
+    topUbis.forEach(tu => dashValues.push([tu[0], tu[1]])); // Rows 39-43 (Indices 38-42)
+
     await updateSheet("DASHBOARD", dashValues);
 
-    // 8. Aplicar estilos, cuadrículas, formatos condicionales y gráfica en DASHBOARD
+    // 8. Aplicar estilos, cuadrículas, formatos condicionales, segmentadores y gráfica en DASHBOARD
     const stylingAndChartRequests: any[] = [
       // Asegurar cuadrículas activas (hideGridlines: false) en todas las hojas
       {
         updateSheetProperties: {
           properties: { sheetId: dashboardSheetId, gridProperties: { hideGridlines: false } },
           fields: "gridProperties.hideGridlines"
+        }
+      },
+      // Descombinar celdas previas en el área de KPIs para evitar conflictos al volver a generar
+      {
+        unmergeCells: {
+          range: {
+            sheetId: dashboardSheetId,
+            startRowIndex: 0,
+            endRowIndex: 30,
+            startColumnIndex: 0,
+            endColumnIndex: 12
+          }
         }
       },
       {
@@ -306,6 +448,337 @@ serve(async (req: Request) => {
         updateSheetProperties: {
           properties: { sheetId: productosSheetId, gridProperties: { hideGridlines: false } },
           fields: "gridProperties.hideGridlines"
+        }
+      },
+      {
+        updateSheetProperties: {
+          properties: { sheetId: conteosRealesSheetId, gridProperties: { hideGridlines: false } },
+          fields: "gridProperties.hideGridlines"
+        }
+      },
+      // --- INTERACTIVIDAD CON SEGMENTADORES (SLICERS) ---
+      {
+        addSlicer: {
+          slicer: {
+            spec: {
+              dataRange: {
+                sheetId: lotesSheetId,
+                startRowIndex: 0,
+                startColumnIndex: 0,
+                endRowIndex: 40000,
+                endColumnIndex: 9
+              },
+              columnIndex: 3, // Centro (Col D) en DATA_LOTES
+              title: "Centro"
+            },
+            position: {
+              overlayPosition: {
+                anchorCell: {
+                  sheetId: dashboardSheetId,
+                  rowIndex: 3,      // Renglón 4 (index 3)
+                  columnIndex: 9    // Columna J (index 9)
+                },
+                widthPixels: 180,
+                heightPixels: 60
+              }
+            }
+          }
+        }
+      },
+      {
+        addSlicer: {
+          slicer: {
+            spec: {
+              dataRange: {
+                sheetId: lotesSheetId,
+                startRowIndex: 0,
+                startColumnIndex: 0,
+                endRowIndex: 40000,
+                endColumnIndex: 9
+              },
+              columnIndex: 4, // Almacen (Col E) en DATA_LOTES
+              title: "Almacén"
+            },
+            position: {
+              overlayPosition: {
+                anchorCell: {
+                  sheetId: dashboardSheetId,
+                  rowIndex: 3,      // Renglón 4 (index 3)
+                  columnIndex: 11   // Columna L (index 11)
+                },
+                widthPixels: 180,
+                heightPixels: 60
+              }
+            }
+          }
+        }
+      },
+      // --- FORMATO PREMIUM DE DASHBOARD ---
+      // 1. Fusión de título principal (A1:H1) y styling
+      {
+        mergeCells: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 8 },
+          mergeType: "MERGE_ALL"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 8 },
+          cell: {
+            userEnteredFormat: {
+              textFormat: { bold: true, fontSize: 16, foregroundColor: { red: 0.12, green: 0.12, blue: 0.12 } },
+              horizontalAlignment: "CENTER",
+              verticalAlignment: "MIDDLE"
+            }
+          },
+          fields: "userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment)"
+        }
+      },
+      // 2. Fusión de fecha (A2:H2) y styling
+      {
+        mergeCells: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 8 },
+          mergeType: "MERGE_ALL"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: 8 },
+          cell: {
+            userEnteredFormat: {
+              textFormat: { italic: true, fontSize: 10, foregroundColor: { red: 0.4, green: 0.4, blue: 0.4 } },
+              horizontalAlignment: "CENTER",
+              verticalAlignment: "MIDDLE"
+            }
+          },
+          fields: "userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment)"
+        }
+      }
+    ];
+
+    // Helper para generar tarjetas de 4 filas x 2 columnas combinadas con Rich Text
+    const cardRequests = (
+      colStart: number,
+      rowLStart: number,
+      titleText: string,
+      valText: string,
+      colorRGB: { red: number; green: number; blue: number },
+      textRGB: { red: number; green: number; blue: number }
+    ) => {
+      const fullText = `${titleText}\n\n${valText}`;
+      const valStartIndex = titleText.length + 2; // length + \n\n
+
+      return [
+        // Merge completo de la tarjeta (4 filas x 2 cols)
+        {
+          mergeCells: {
+            range: {
+              sheetId: dashboardSheetId,
+              startRowIndex: rowLStart,
+              endRowIndex: rowLStart + 4,
+              startColumnIndex: colStart,
+              endColumnIndex: colStart + 2
+            },
+            mergeType: "MERGE_ALL"
+          }
+        },
+        // Estilo de fondo y bordes para todas las celdas combinadas de la tarjeta
+        {
+          repeatCell: {
+            range: {
+              sheetId: dashboardSheetId,
+              startRowIndex: rowLStart,
+              endRowIndex: rowLStart + 4,
+              startColumnIndex: colStart,
+              endColumnIndex: colStart + 2
+            },
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: colorRGB,
+                borders: {
+                  top: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } },
+                  bottom: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } },
+                  left: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } },
+                  right: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } }
+                }
+              }
+            },
+            fields: "userEnteredFormat(backgroundColor,borders)"
+          }
+        },
+        // Escribir Valor Combinado y aplicar TextFormatRuns en la celda inicial
+        {
+          updateCells: {
+            range: {
+              sheetId: dashboardSheetId,
+              startRowIndex: rowLStart,
+              endRowIndex: rowLStart + 1,
+              startColumnIndex: colStart,
+              endColumnIndex: colStart + 1
+            },
+            rows: [
+              {
+                values: [
+                  {
+                    userEnteredValue: {
+                      stringValue: fullText
+                    },
+                    userEnteredFormat: {
+                      backgroundColor: colorRGB,
+                      borders: {
+                        top: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } },
+                        bottom: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } },
+                        left: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } },
+                        right: { style: "SOLID", color: { red: 0.4, green: 0.4, blue: 0.4 } }
+                      },
+                      horizontalAlignment: "CENTER",
+                      verticalAlignment: "MIDDLE"
+                    },
+                    textFormatRuns: [
+                      {
+                        startIndex: 0,
+                        format: {
+                          bold: true,
+                          fontSize: 10,
+                          foregroundColor: textRGB
+                        }
+                      },
+                      {
+                        startIndex: valStartIndex,
+                        format: {
+                          bold: true,
+                          fontSize: 20,
+                          foregroundColor: textRGB
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            fields: "userEnteredValue,userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,borders),textFormatRuns"
+          }
+        }
+      ];
+    };
+
+    const cards = [
+      { col: 0, rowL: 4, title: "TOTAL CATÁLOGO (SAP)", val: (reportProductos.length - 1).toLocaleString('en-US'), bg: { red: 0.94, green: 0.94, blue: 0.94 }, txt: { red: 0.2, green: 0.2, blue: 0.2 } },
+      { col: 3, rowL: 4, title: "PRODUCTOS CON DISCREPANCIA", val: diffProdCount.toLocaleString('en-US'), bg: { red: 0.99, green: 0.88, blue: 0.88 }, txt: { red: 0.6, green: 0.0, blue: 0.0 } },
+      { col: 6, rowL: 4, title: "PRECISIÓN GENERAL", val: `${(precisionVal * 100).toFixed(2)}%`, bg: { red: 0.88, green: 0.95, blue: 0.88 }, txt: { red: 0.0, green: 0.4, blue: 0.0 } },
+      { col: 0, rowL: 8, title: "AVANCE DE CONTEO", val: `${(kpiAvance * 100).toFixed(2)}%`, bg: { red: 0.88, green: 0.88, blue: 0.98 }, txt: { red: 0.1, green: 0.1, blue: 0.5 } },
+      { col: 3, rowL: 8, title: "EFECTO ESPEJO (CRUCES)", val: kpiEfectoEspejo.toLocaleString('en-US'), bg: { red: 0.99, green: 0.99, blue: 0.85 }, txt: { red: 0.5, green: 0.4, blue: 0.1 } },
+      { col: 6, rowL: 8, title: "CONFLICTOS MULTIUSUARIO", val: kpiConflictosMultiusuario.toLocaleString('en-US'), bg: { red: 0.99, green: 0.92, blue: 0.82 }, txt: { red: 0.6, green: 0.3, blue: 0.1 } }
+    ];
+
+    cards.forEach(c => {
+      stylingAndChartRequests.push(...cardRequests(c.col, c.rowL, c.title, c.val, c.bg, c.txt));
+    });
+
+    // Añadir solicitudes restantes
+    stylingAndChartRequests.push(
+      // 9. Título y Encabezados de Tabla de Resumen de Discrepancias (Fila 14, index 13)
+      {
+        mergeCells: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 13, endRowIndex: 14, startColumnIndex: 0, endColumnIndex: 2 },
+          mergeType: "MERGE_ALL"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 13, endRowIndex: 14, startColumnIndex: 0, endColumnIndex: 2 },
+          cell: {
+            userEnteredFormat: {
+              textFormat: { bold: true, fontSize: 12, foregroundColor: { red: 0.12, green: 0.12, blue: 0.12 } },
+              horizontalAlignment: "LEFT",
+              verticalAlignment: "MIDDLE"
+            }
+          },
+          fields: "userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment)"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 14, endRowIndex: 15, startColumnIndex: 0, endColumnIndex: 2 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.12, green: 0.12, blue: 0.12 },
+              textFormat: { foregroundColor: { red: 1.0, green: 1.0, blue: 1.0 }, bold: true }
+            }
+          },
+          fields: "userEnteredFormat(backgroundColor,textFormat)"
+        }
+      },
+      // Alineaciones de tabla de resumen (Filas 16 a 35, index 15 a 35)
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 15, endRowIndex: 35, startColumnIndex: 0, endColumnIndex: 1 },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 15, endRowIndex: 35, startColumnIndex: 1, endColumnIndex: 2 },
+          cell: {
+            userEnteredFormat: {
+              horizontalAlignment: "RIGHT",
+              numberFormat: { type: "NUMBER", pattern: "#,##0" }
+            }
+          },
+          fields: "userEnteredFormat(horizontalAlignment,numberFormat)"
+        }
+      },
+      // 10. Título y Encabezados de Tabla de Top Ubicaciones Desordenadas (Fila 37, index 36)
+      {
+        mergeCells: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 36, endRowIndex: 37, startColumnIndex: 0, endColumnIndex: 2 },
+          mergeType: "MERGE_ALL"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 36, endRowIndex: 37, startColumnIndex: 0, endColumnIndex: 2 },
+          cell: {
+            userEnteredFormat: {
+              textFormat: { bold: true, fontSize: 12, foregroundColor: { red: 0.12, green: 0.12, blue: 0.12 } },
+              horizontalAlignment: "LEFT",
+              verticalAlignment: "MIDDLE"
+            }
+          },
+          fields: "userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment)"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 37, endRowIndex: 38, startColumnIndex: 0, endColumnIndex: 2 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.12, green: 0.12, blue: 0.12 },
+              textFormat: { foregroundColor: { red: 1.0, green: 1.0, blue: 1.0 }, bold: true }
+            }
+          },
+          fields: "userEnteredFormat(backgroundColor,textFormat)"
+        }
+      },
+      // Alineaciones de tabla de ubicaciones (Filas 39 a 43, index 38 a 43)
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 38, endRowIndex: 43, startColumnIndex: 0, endColumnIndex: 1 },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: dashboardSheetId, startRowIndex: 38, endRowIndex: 43, startColumnIndex: 1, endColumnIndex: 2 },
+          cell: {
+            userEnteredFormat: {
+              horizontalAlignment: "RIGHT",
+              numberFormat: { type: "NUMBER", pattern: "#,##0" }
+            }
+          },
+          fields: "userEnteredFormat(horizontalAlignment,numberFormat)"
         }
       },
       // Encabezados DATA_LOTES (Gris oscuro, texto blanco negrita)
@@ -325,6 +798,19 @@ serve(async (req: Request) => {
       {
         repeatCell: {
           range: { sheetId: productosSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 5 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.12, green: 0.12, blue: 0.12 },
+              textFormat: { foregroundColor: { red: 1.0, green: 1.0, blue: 1.0 }, bold: true }
+            }
+          },
+          fields: "userEnteredFormat(backgroundColor,textFormat)"
+        }
+      },
+      // Encabezados CONTEOS_REALES (Gris oscuro, texto blanco negrita)
+      {
+        repeatCell: {
+          range: { sheetId: conteosRealesSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 6 },
           cell: {
             userEnteredFormat: {
               backgroundColor: { red: 0.12, green: 0.12, blue: 0.12 },
@@ -373,6 +859,29 @@ serve(async (req: Request) => {
           fields: "userEnteredFormat.horizontalAlignment"
         }
       },
+      // Alineaciones CONTEOS_REALES: Centrar SKU (Columna A, index 0) y Lote (Columna C, index 2)
+      {
+        repeatCell: {
+          range: { sheetId: conteosRealesSheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      {
+        repeatCell: {
+          range: { sheetId: conteosRealesSheetId, startRowIndex: 1, startColumnIndex: 2, endColumnIndex: 3 },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
+      // Alineaciones CONTEOS_REALES: Alinear a la derecha cantidad física (Columna index 4)
+      {
+        repeatCell: {
+          range: { sheetId: conteosRealesSheetId, startRowIndex: 1, startColumnIndex: 4, endColumnIndex: 5 },
+          cell: { userEnteredFormat: { horizontalAlignment: "RIGHT" } },
+          fields: "userEnteredFormat.horizontalAlignment"
+        }
+      },
       // Formato condicional en DATA_LOTES: Diferencia (Columna I, index 8) < 0 -> Fondo Rojo Suave
       {
         addConditionalFormatRule: {
@@ -399,7 +908,7 @@ serve(async (req: Request) => {
           index: 0
         }
       },
-      // Gráfica en DASHBOARD
+      // Gráfica en DASHBOARD (Posición J5, ampliada y estilizada)
       {
         addChart: {
           chart: {
@@ -408,20 +917,24 @@ serve(async (req: Request) => {
               basicChart: {
                 chartType: "COLUMN",
                 axis: [{ position: "BOTTOM_AXIS", title: "SKU" }, { position: "LEFT_AXIS", title: "Diferencia" }],
-                domains: [{ domain: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 21, endRowIndex: 21 + topDiffs.length, startColumnIndex: 0, endColumnIndex: 1 }] } } }],
-                series: [{ series: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 21, endRowIndex: 21 + topDiffs.length, startColumnIndex: 1, endColumnIndex: 2 }] } }, targetAxis: "LEFT_AXIS" }]
+                domains: [{ domain: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 15, endRowIndex: 15 + topDiffs.length, startColumnIndex: 0, endColumnIndex: 1 }] } } }],
+                series: [{ series: { sourceRange: { sources: [{ sheetId: dashboardSheetId, startRowIndex: 15, endRowIndex: 15 + topDiffs.length, startColumnIndex: 1, endColumnIndex: 2 }] } }, targetAxis: "LEFT_AXIS" }]
               }
             },
-            position: { overlayPosition: { anchorCell: { sheetId: dashboardSheetId, rowIndex: 2, columnIndex: 3 }, widthPixels: 750, heightPixels: 400 } }
+            position: { overlayPosition: { anchorCell: { sheetId: dashboardSheetId, rowIndex: 4, columnIndex: 9 }, widthPixels: 850, heightPixels: 450 } }
           }
         }
       }
-    ];
+    );
 
-    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+    const finalRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
       method: "POST", headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: JSON.stringify({ requests: stylingAndChartRequests })
     });
+    if (!finalRes.ok) {
+      const errorText = await finalRes.text();
+      throw new Error("Error aplicando estilos y gráficos en batchUpdate: " + errorText);
+    }
 
     return new Response(JSON.stringify({ 
       success: true, 
@@ -440,3 +953,5 @@ serve(async (req: Request) => {
     });
   }
 });
+
+
