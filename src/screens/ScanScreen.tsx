@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Button, TextInput, Alert, ActivityIndicator, Modal, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, Button, TextInput, Alert, ActivityIndicator, Modal, FlatList, TouchableOpacity, StyleSheet, DeviceEventEmitter, Platform } from 'react-native';
 import { supabase } from '../services/supabase';
 import ZebraScanner from '../components/Scanner/ZebraScanner';
 import CameraScanner from '../components/Scanner/CameraScanner';
@@ -18,6 +18,33 @@ export default function ScanScreen({ route, navigation }: any) {
     // Si el fabricante no es Zebra, usamos la cámara por defecto.
     const isZebra = Device.manufacturer?.toLowerCase().includes('zebra');
     setUseCamera(!isZebra);
+  }, []);
+
+  useEffect(() => {
+    // Configuración recomendada en la aplicación nativa de DataWedge en terminales Zebra:
+    // ---------------------------------------------------------------------------------
+    // * Profile Name: Multigroup
+    // * Associated App: com.multigroup.inventario (o "*" para todas las actividades)
+    // * Intent Delivery: Broadcast Intent
+    // * Intent Action: com.multigroup.inventario.ACTION
+    // * Intent Category: (Dejar vacía o por defecto)
+    // ---------------------------------------------------------------------------------
+    if (Platform.OS === 'android') {
+      const subscription = DeviceEventEmitter.addListener(
+        'onBroadcastReceiverReceived',
+        (event: any) => {
+          if (event && event.action === 'com.multigroup.inventario.ACTION') {
+            const barcode = event.extras?.['com.symbol.datawedge.data_string'] || event['com.symbol.datawedge.data_string'];
+            if (barcode) {
+              searchAndNavigate(barcode.trim());
+            }
+          }
+        }
+      );
+      return () => {
+        subscription.remove();
+      };
+    }
   }, []);
 
   const navigateToCapture = (item: any, cantidadExtraida: string) => {
@@ -121,14 +148,14 @@ export default function ScanScreen({ route, navigation }: any) {
     }
   };
 
-  const handleFinalizeConteo = async () => {
+  const handleFinishAssignment = async () => {
     if (!asignacionId) {
       Alert.alert('Error', 'No hay una asignación activa.');
       return;
     }
     Alert.alert(
       'Finalizar Conteo de Ubicación',
-      `¿Estás seguro de finalizar el conteo en esta ubicación (Nave ${nave}, Sección ${seccion}, Número ${numero})?`,
+      '¿Estás seguro de finalizar el conteo en esta ubicación? Ya no podrás agregar más materiales a esta zona.',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -144,7 +171,7 @@ export default function ScanScreen({ route, navigation }: any) {
 
               if (error) throw error;
 
-              Alert.alert('Ubicación Finalizada', 'La ubicación ha sido marcada como completada.', [
+              Alert.alert('Ubicación Finalizada', 'La ubicación ha sido marcada como completada con éxito.', [
                 { text: 'OK', onPress: () => navigation.goBack() }
               ]);
             } catch (e: any) {
@@ -189,7 +216,7 @@ export default function ScanScreen({ route, navigation }: any) {
       {asignacionId && (
         <TouchableOpacity 
           style={styles.finalizeButton} 
-          onPress={handleFinalizeConteo}
+          onPress={handleFinishAssignment}
           disabled={loading}
         >
           {loading ? (

@@ -19,7 +19,12 @@ interface Asignacion {
   nave: string;
   seccion: string;
   numero: string;
-  estado: 'pendiente' | 'completada';
+  estado: 'pendiente' | 'en_progreso' | 'completada';
+  operador_id?: string;
+  auxiliar_1_id?: string;
+  centro?: string;
+  almacen?: string;
+  ubicacion?: string;
 }
 
 export default function AuxiliarScreen({ navigation }: any) {
@@ -49,7 +54,7 @@ export default function AuxiliarScreen({ navigation }: any) {
         .from('asignaciones_conteo')
         .select('*')
         .eq('operador_id', user.id)
-        .eq('estado', 'pendiente');
+        .in('estado', ['pendiente', 'en_progreso']);
 
       if (error) throw error;
       setAsignaciones(data || []);
@@ -61,7 +66,33 @@ export default function AuxiliarScreen({ navigation }: any) {
     }
   };
 
-  const handleStartConteo = (item: Asignacion) => {
+  const handleStartConteo = async (item: Asignacion) => {
+    if (item.estado === 'pendiente') {
+      try {
+        const { error } = await supabase
+          .from('asignaciones_conteo')
+          .update({
+            id: item.id,
+            estado: 'en_progreso',
+            operador_id: item.operador_id || user?.id,
+            auxiliar_1_id: item.auxiliar_1_id || user?.id,
+            centro: item.centro || 'C200',
+            almacen: item.almacen || 'A100',
+            ubicacion: item.ubicacion || `${item.nave}${item.seccion}${item.numero.padStart(3, '0')}`,
+            nave: item.nave,
+            seccion: item.seccion,
+            numero: item.numero
+          })
+          .eq('id', item.id);
+        
+        if (error) throw error;
+      } catch (err: any) {
+        console.error('Error al actualizar estado a en_progreso:', err);
+        Alert.alert('Error de Conexión', 'No se pudo iniciar el conteo en Supabase: ' + err.message);
+        return; // Detener flujo para no navegar si falló la actualización
+      }
+    }
+
     navigation.navigate('Scan', {
       nave: item.nave,
       seccion: item.seccion,
@@ -112,9 +143,24 @@ export default function AuxiliarScreen({ navigation }: any) {
 
   const renderItem = ({ item }: { item: Asignacion }) => (
     <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <MapPin color="#e6a822" size={22} />
-        <Text style={styles.cardTitle}>UBICACIÓN ASIGNADA</Text>
+      <View style={[styles.cardHeader, { justifyContent: 'space-between' }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <MapPin color="#e6a822" size={22} />
+          <Text style={styles.cardTitle}>UBICACIÓN ASIGNADA</Text>
+        </View>
+        <View style={[
+          styles.statusBadge,
+          item.estado === 'en_progreso' 
+            ? { backgroundColor: 'rgba(230, 168, 34, 0.15)', borderColor: '#e6a822' }
+            : { backgroundColor: 'rgba(255, 255, 255, 0.08)', borderColor: '#555' }
+        ]}>
+          <Text style={[
+            styles.statusBadgeText,
+            item.estado === 'en_progreso' ? { color: '#e6a822' } : { color: '#aaa' }
+          ]}>
+            {item.estado === 'en_progreso' ? 'EN PROGRESO' : 'PENDIENTE'}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.layoutInfoRow}>
@@ -138,7 +184,9 @@ export default function AuxiliarScreen({ navigation }: any) {
           onPress={() => handleStartConteo(item)}
         >
           <Play color="#121212" size={18} fill="#121212" />
-          <Text style={styles.startButtonText}>Iniciar Conteo</Text>
+          <Text style={styles.startButtonText}>
+            {item.estado === 'en_progreso' ? 'Reanudar Conteo' : 'Iniciar Conteo'}
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -483,5 +531,16 @@ const styles = StyleSheet.create({
   modalBtnSendText: {
     color: '#121212',
     fontWeight: '900',
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  statusBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
 });

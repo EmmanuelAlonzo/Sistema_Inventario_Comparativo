@@ -57,6 +57,14 @@ interface UbicacionCatalogo {
   numero: string;
 }
 
+const generateUUID = (): string => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
 export default function SupervisorScreen({ navigation }: any) {
   const { user, logout } = useAuth();
   const [loading, setLoading] = useState(false);
@@ -407,17 +415,26 @@ export default function SupervisorScreen({ navigation }: any) {
 
     setAssignLoading(true);
     try {
+      const assignmentId = generateUUID();
+      const ubicacionConcatenada = `${selectedUbicacion.nave}${selectedUbicacion.seccion}${selectedUbicacion.numero.padStart(3, '0')}`;
+
+      // Usar upsert con ignoreDuplicates: true para evitar duplicaciones al guardar en Supabase
+      // Enviamos tanto la estructura de layouts (nave/seccion/numero) como el esquema público (centro/almacen/ubicacion)
+      // auxiliar_1_id es obligatorio en la base de datos pública y se mapea al ID del operador
       const { error } = await supabase
         .from('asignaciones_conteo')
-        .insert([
-          {
-            operador_id: selectedOperador.id,
-            nave: selectedUbicacion.nave,
-            seccion: selectedUbicacion.seccion,
-            numero: selectedUbicacion.numero,
-            estado: 'pendiente'
-          }
-        ]);
+        .upsert({
+          id: assignmentId,
+          operador_id: selectedOperador.id,
+          auxiliar_1_id: selectedOperador.id,
+          nave: selectedUbicacion.nave,
+          seccion: selectedUbicacion.seccion,
+          numero: selectedUbicacion.numero,
+          centro: 'C200',
+          almacen: 'A100',
+          ubicacion: ubicacionConcatenada,
+          estado: 'pendiente'
+        }, { onConflict: 'id', ignoreDuplicates: true });
 
       if (error) throw error;
 

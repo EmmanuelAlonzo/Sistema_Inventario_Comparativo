@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.inventario_maestro (
 );
 
 ALTER TABLE public.inventario_maestro ENABLE ROW LEVEL SECURITY;
--- Todos pueden leer el maestro para mandarlo a SQLite
+-- Todos pueden leer el maestro directamente en tiempo real desde la aplicación
 CREATE POLICY "Permitir lectura del maestro" ON public.inventario_maestro FOR SELECT USING (true);
 
 -- 3. Tabla: conteos_picking (Donde caen los envíos del handheld)

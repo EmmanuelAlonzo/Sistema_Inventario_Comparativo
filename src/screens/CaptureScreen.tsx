@@ -7,12 +7,24 @@ const NAVES = ['201', '202', '203', '204', '205', '206', '207', '208', '209', '2
 const FILAS = ['A', 'B', 'C'];
 const NIVELES = ['1', '2', '3', '4', '5', '6'];
 
+const generateUUID = (): string => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
 export default function CaptureScreen({ route, navigation }: any) {
   const { user } = useAuth();
+  const [transactionId] = useState(() => generateUUID());
   const preloadedData = route.params?.data || null;
   const initialSku = route.params?.sku || '';
   const initialLote = route.params?.lote || route.params?.sku || '';
   const initialCantidad = route.params?.cantidad || '';
+  
+  const { asignacionId } = route.params || {};
+  const isAssigned = !!asignacionId;
   
   const [sku, setSku] = useState(initialSku === 'Desconocido' ? '' : initialSku);
   const [lote, setLote] = useState(initialLote === 'Desconocido' ? '' : initialLote);
@@ -48,11 +60,13 @@ export default function CaptureScreen({ route, navigation }: any) {
   const saveToDb = async (ubicacionReal: string, columnaStr: string) => {
     setLoading(true);
     try {
-      const idStr = Math.random().toString(36).substring(2, 15);
       const timestamp = new Date().toISOString();
 
-      // Guardar directamente en Supabase (usando las columnas del esquema remoto)
-      const { error } = await supabase.from('conteos_picking').insert({
+      // Guardar directamente en Supabase en tiempo real usando UPSERT
+      // id: transactionId asegura la idempotencia (evita duplicados si el usuario reintenta)
+      // ignoreDuplicates: true le indica a PostgreSQL hacer 'ON CONFLICT (id) DO NOTHING'
+      const { error } = await supabase.from('conteos_picking').upsert({
+        id: transactionId,
         sku: sku || null,
         lote: lote || null,
         descripcion: descripcion || null,
@@ -61,16 +75,20 @@ export default function CaptureScreen({ route, navigation }: any) {
         timestamp,
         operador_id: user ? user.codigo_empleado : null,
         sincronizado_drive: false
-      });
+      }, { onConflict: 'id', ignoreDuplicates: true });
       
       if (error) throw error;
       
-      Alert.alert('Conteo Guardado', `Ubicación Real: ${ubicacionReal}\nSincronizado con Supabase.`, [
+      Alert.alert('Conteo Guardado', `Ubicación Real: ${ubicacionReal}\nSincronizado con Supabase en tiempo real.`, [
         { text: 'OK', onPress: () => navigation.goBack() }
       ]);
     } catch (error: any) {
-      console.error(error);
-      Alert.alert('Error', 'No se pudo guardar en la nube: ' + error.message);
+      console.error('Error al guardar en Supabase:', error);
+      Alert.alert(
+        '⚠️ Error de Conexión / Guardado',
+        `El conteo NO pudo ser guardado en la nube.\n\nDetalle: ${error.message || 'Error de conexión a Internet'}\n\nLos datos ingresados siguen en pantalla. Por favor, verifica tu conexión a Internet e intenta de nuevo.`,
+        [{ text: 'Entendido' }]
+      );
     } finally {
       setLoading(false);
     }
@@ -141,13 +159,27 @@ export default function CaptureScreen({ route, navigation }: any) {
           placeholder="0"
         />
 
-        <Text style={styles.label}>2. Selecciona Nave (201 - 210)</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, marginBottom: 10 }}>
+          <Text style={{ color: '#00ffcc', fontSize: 14, fontWeight: '600', textTransform: 'uppercase' }}>
+            {isAssigned ? '📍 Ubicación Asignada (Fija)' : '2. Selecciona Nave (201 - 210)'}
+          </Text>
+          {isAssigned && (
+            <View style={{ backgroundColor: 'rgba(230, 168, 34, 0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#e6a822' }}>
+              <Text style={{ color: '#e6a822', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 }}>🔒 BLOQUEADO</Text>
+            </View>
+          )}
+        </View>
         <View style={styles.gridContainer}>
           {NAVES.map(n => (
             <TouchableOpacity 
               key={n} 
-              style={[styles.gridButton, nave === n && styles.gridButtonActive]}
+              style={[
+                styles.gridButton, 
+                nave === n && styles.gridButtonActive,
+                isAssigned && nave !== n && { opacity: 0.25 }
+              ]}
               onPress={() => setNave(n)}
+              disabled={isAssigned}
             >
               <Text style={[styles.gridButtonText, nave === n && styles.gridButtonTextActive]}>{n}</Text>
             </TouchableOpacity>
@@ -161,8 +193,13 @@ export default function CaptureScreen({ route, navigation }: any) {
               {FILAS.map(f => (
                 <TouchableOpacity 
                   key={f} 
-                  style={[styles.smallButton, fila === f && styles.smallButtonActive]}
+                  style={[
+                    styles.smallButton, 
+                    fila === f && styles.smallButtonActive,
+                    isAssigned && fila !== f && { opacity: 0.25 }
+                  ]}
                   onPress={() => setFila(f)}
+                  disabled={isAssigned}
                 >
                   <Text style={[styles.gridButtonText, fila === f && styles.gridButtonTextActive]}>{f}</Text>
                 </TouchableOpacity>
@@ -176,8 +213,13 @@ export default function CaptureScreen({ route, navigation }: any) {
               {NIVELES.map(niv => (
                 <TouchableOpacity 
                   key={niv} 
-                  style={[styles.smallButtonWrap, nivel === niv && styles.smallButtonActive]}
+                  style={[
+                    styles.smallButtonWrap, 
+                    nivel === niv && styles.smallButtonActive,
+                    isAssigned && nivel !== niv && { opacity: 0.25 }
+                  ]}
                   onPress={() => setNivel(niv)}
+                  disabled={isAssigned}
                 >
                   <Text style={[styles.gridButtonText, nivel === niv && styles.gridButtonTextActive]}>{niv}</Text>
                 </TouchableOpacity>
