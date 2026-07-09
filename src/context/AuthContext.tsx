@@ -26,41 +26,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [mustChangePin, setMustChangePin] = useState(false);
 
-  // Cargar usuario persistido al iniciar
+  // Cargar usuario persistido al iniciar con try/catch estricto y fallback offline
   useEffect(() => {
+    let active = true;
+
     async function loadPersistedUser() {
       try {
         const storedUser = await AsyncStorage.getItem('@auth_user');
-        if (storedUser) {
+        if (storedUser && active) {
           const parsedUser = JSON.parse(storedUser);
           
-          // Verificar PIN y estado actual en tiempo real en la nube
-          const { data, error } = await supabase
-            .from('usuarios_bodega')
-            .select('pin, estado')
-            .eq('id', parsedUser.id);
+          try {
+            // Verificar PIN y estado actual en tiempo real en la nube
+            const { data, error } = await supabase
+              .from('usuarios_bodega')
+              .select('pin, estado')
+              .eq('id', parsedUser.id);
 
-          if (data && data.length > 0) {
-            const currentProfile = data[0];
-            if (currentProfile.estado === 'suspendido') {
-              await AsyncStorage.removeItem('@auth_user');
-              setUser(null);
-              return;
+            if (error) {
+              console.warn('Error devuelto por la consulta de Supabase al arranque:', error);
+            } else if (data && data.length > 0) {
+              const currentProfile = data[0];
+              if (currentProfile.estado === 'suspendido') {
+                await AsyncStorage.removeItem('@auth_user');
+                if (active) setUser(null);
+                return;
+              }
+              if (currentProfile.pin === '0000') {
+                if (active) setMustChangePin(true);
+              }
             }
-            if (currentProfile.pin === '0000') {
-              setMustChangePin(true);
-            }
+          } catch (supabaseError) {
+            console.error('Error de red/conexión al validar sesión en Supabase:', supabaseError);
+            // Fallback offline: si falla la consulta a la nube, dejamos que use su sesión persistida
           }
           
-          setUser(parsedUser);
+          if (active) setUser(parsedUser);
         }
       } catch (e) {
-        console.error('Error al cargar la sesión persistida:', e);
+        console.error('Error crítico al recuperar la sesión persistida:', e);
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
-    loadPersistedUser();
+
+    try {
+      loadPersistedUser();
+    } catch (syncError) {
+      console.error('Error síncrono crítico al iniciar loadPersistedUser:', syncError);
+      setLoading(false);
+    }
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const login = async (codigoEmpleado: string, pin: string): Promise<UserProfile> => {

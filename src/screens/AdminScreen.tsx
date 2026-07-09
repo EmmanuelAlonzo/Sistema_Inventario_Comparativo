@@ -91,6 +91,17 @@ export default function AdminScreen({ navigation }: any) {
   const [newRol, setNewRol] = useState<'auxiliar' | 'supervisor' | 'admin'>('auxiliar');
   const [secondaryFieldsOptional, setSecondaryFieldsOptional] = useState(false);
 
+  // Modal y formulario Editar Usuario
+  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<Usuario | null>(null);
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editSecondName, setEditSecondName] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [editSecondLastName, setEditSecondLastName] = useState('');
+  const [editCodigo, setEditCodigo] = useState('');
+  const [editPin, setEditPin] = useState('');
+  const [editRol, setEditRol] = useState<'auxiliar' | 'supervisor' | 'admin'>('auxiliar');
+
   // Formulario Asignar Ubicación
   const [selectedOperador, setSelectedOperador] = useState<Usuario | null>(null);
   const [showOperatorSelectModal, setShowOperatorSelectModal] = useState(false);
@@ -318,6 +329,65 @@ export default function AdminScreen({ navigation }: any) {
       fetchPersonal();
     } catch (e: any) {
       Alert.alert('Error', 'No se pudo crear el usuario: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenEditModal = (item: Usuario) => {
+    console.log("Abriendo modal para:", item.primer_nombre);
+    
+    // Guardar los datos de forma inmediata y síncrona en los estados locales
+    setEditingUser(item);
+    setEditFirstName(item.primer_nombre || '');
+    setEditSecondName(item.segundo_nombre || '');
+    setEditLastName(item.primer_apellido || '');
+    setEditSecondLastName(item.segundo_apellido || '');
+    setEditCodigo(item.codigo_empleado || '');
+    setEditPin(item.pin || '');
+    setEditRol((item.rol as any) || 'auxiliar');
+    
+    // Ejecutar la apertura en el próximo ciclo del event loop para asegurar que React
+    // haya procesado las actualizaciones de estado, previniendo desfases
+    setTimeout(() => {
+      setShowEditUserModal(true);
+    }, 0);
+  };
+
+  const handleUpdateUser = async () => {
+    if (!editingUser) return;
+
+    if (!editFirstName.trim() || !editLastName.trim() || !editCodigo.trim() || editPin.length !== 4) {
+      Alert.alert(
+        'Datos Incompletos',
+        'Por favor llena todos los campos obligatorios (Primer Nombre, Primer Apellido, Código de Empleado). El PIN debe tener exactamente 4 dígitos.'
+      );
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('usuarios_bodega')
+        .update({
+          primer_nombre: editFirstName.trim(),
+          segundo_nombre: editSecondName.trim() || null,
+          primer_apellido: editLastName.trim(),
+          segundo_apellido: editSecondLastName.trim() || null,
+          codigo_empleado: editCodigo.trim(),
+          pin: editPin.trim(),
+          rol: editRol
+        })
+        .eq('id', editingUser.id);
+
+      if (error) throw error;
+
+      Alert.alert('Usuario Actualizado', 'Los datos del operador han sido actualizados correctamente.');
+      setShowEditUserModal(false);
+      setEditingUser(null);
+      fetchPersonal();
+    } catch (e: any) {
+      Alert.alert('Error', 'No se pudo actualizar el usuario: ' + e.message);
     } finally {
       setLoading(false);
     }
@@ -841,13 +911,21 @@ export default function AdminScreen({ navigation }: any) {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listPadding}
             renderItem={({ item }) => (
-              <View style={styles.userItem}>
+              <TouchableOpacity 
+                style={styles.userItem}
+                activeOpacity={0.7}
+                onPress={() => handleOpenEditModal(item)}
+              >
                 <View style={styles.userMeta}>
                   <Text style={styles.userItemName}>
                     {item.primer_nombre} {item.segundo_nombre || ''} {item.primer_apellido} {item.segundo_apellido || ''}
                   </Text>
                   <Text style={styles.userItemInfo}>
-                    Código: #{item.codigo_empleado} • PIN: {item.pin}
+                    Código: #{item.codigo_empleado} • PIN: {item.pin} • Rol: {item.rol.toUpperCase()}
+                  </Text>
+                  {/* Indicador visual táctil */}
+                  <Text style={{ color: '#ff4444', fontSize: 10, fontWeight: '800', marginTop: 5, letterSpacing: 0.5 }}>
+                    👉 Pulsar para Editar
                   </Text>
                 </View>
 
@@ -859,6 +937,7 @@ export default function AdminScreen({ navigation }: any) {
                     ]}
                     onPress={() => handleToggleUserStatus(item)}
                     disabled={loading}
+                    activeOpacity={0.7}
                   >
                     {item.estado === 'activo' ? (
                       <>
@@ -878,11 +957,12 @@ export default function AdminScreen({ navigation }: any) {
                     style={styles.deleteUserBtn}
                     onPress={() => handleDeleteUser(item)}
                     disabled={loading}
+                    activeOpacity={0.7}
                   >
                     <Trash2 color="#ff4444" size={18} />
                   </TouchableOpacity>
                 </View>
-              </View>
+              </TouchableOpacity>
             )}
           />
         </View>
@@ -1048,6 +1128,8 @@ export default function AdminScreen({ navigation }: any) {
         </View>
       </Modal>
 
+
+
       {/* Modal Cambiar PIN */}
       <Modal
         visible={showChangePinModal}
@@ -1103,6 +1185,124 @@ export default function AdminScreen({ navigation }: any) {
           </View>
         </View>
       </Modal>
+
+      {/* Modal Editar Usuario (Premium) */}
+      {showEditUserModal && editingUser && (
+        <Modal
+          visible={showEditUserModal}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => {
+            if (!loading) {
+              setShowEditUserModal(false);
+              setEditingUser(null);
+            }
+          }}
+        >
+          <View style={styles.modalOverlay}>
+            <ScrollView contentContainerStyle={{flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20}}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>EDITAR OPERADOR</Text>
+                
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Primer Nombre (Obligatorio)"
+                  placeholderTextColor="#666"
+                  value={editFirstName}
+                  onChangeText={setEditFirstName}
+                  editable={!loading}
+                />
+
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Segundo Nombre (Opcional)"
+                  placeholderTextColor="#666"
+                  value={editSecondName}
+                  onChangeText={setEditSecondName}
+                  editable={!loading}
+                />
+
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Primer Apellido (Obligatorio)"
+                  placeholderTextColor="#666"
+                  value={editLastName}
+                  onChangeText={setEditLastName}
+                  editable={!loading}
+                />
+
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Segundo Apellido (Opcional)"
+                  placeholderTextColor="#666"
+                  value={editSecondLastName}
+                  onChangeText={setEditSecondLastName}
+                  editable={!loading}
+                />
+
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Código de Empleado"
+                  placeholderTextColor="#666"
+                  keyboardType="numeric"
+                  value={editCodigo}
+                  onChangeText={setEditCodigo}
+                  editable={!loading}
+                />
+
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="PIN de Seguridad (4 dígitos)"
+                  placeholderTextColor="#666"
+                  keyboardType="numeric"
+                  maxLength={4}
+                  secureTextEntry
+                  value={editPin}
+                  onChangeText={setEditPin}
+                  editable={!loading}
+                />
+
+                {/* Selector de Rol */}
+                <Text style={styles.roleLabel}>ROL ASIGNADO:</Text>
+                <View style={styles.rolesRow}>
+                  {['auxiliar', 'supervisor', 'admin'].map((r) => (
+                    <TouchableOpacity
+                      key={r}
+                      style={[styles.roleSelectBtn, editRol === r && styles.roleSelectBtnActive]}
+                      onPress={() => setEditRol(r as any)}
+                      disabled={loading}
+                    >
+                      <Text style={[styles.roleSelectText, editRol === r && styles.roleSelectTextActive]}>
+                        {r.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity 
+                    style={[styles.modalBtn, styles.modalBtnCancel]}
+                    onPress={() => {
+                      setShowEditUserModal(false);
+                      setEditingUser(null);
+                    }}
+                    disabled={loading}
+                  >
+                    <Text style={styles.modalBtnCancelText}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.modalBtn, styles.modalBtnSend]}
+                    onPress={handleUpdateUser}
+                    disabled={loading}
+                  >
+                    {loading ? <ActivityIndicator size="small" color="#121212" /> : <Text style={styles.modalBtnSendText}>Guardar</Text>}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </ScrollView>
+          </View>
+        </Modal>
+      )}
     </View>
   );
 }

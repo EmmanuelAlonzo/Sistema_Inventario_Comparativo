@@ -166,7 +166,7 @@ export default function ScanScreen({ route, navigation }: any) {
             try {
               const { error } = await supabase
                 .from('asignaciones_conteo')
-                .update({ estado: 'completada' })
+                .update({ estado: 'completado' })
                 .eq('id', asignacionId);
 
               if (error) throw error;

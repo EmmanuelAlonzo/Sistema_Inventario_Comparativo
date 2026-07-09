@@ -163,19 +163,11 @@ export default function AuxiliarScreen({ navigation }: any) {
         </View>
       </View>
 
-      <View style={styles.layoutInfoRow}>
-        <View style={styles.infoCol}>
-          <Text style={styles.infoLabel}>NAVE</Text>
-          <Text style={styles.infoValue}>{item.nave}</Text>
-        </View>
-        <View style={styles.infoCol}>
-          <Text style={styles.infoLabel}>SECCIÓN</Text>
-          <Text style={styles.infoValue}>{item.seccion}</Text>
-        </View>
-        <View style={styles.infoCol}>
-          <Text style={styles.infoLabel}>NÚMERO</Text>
-          <Text style={styles.infoValue}>{item.numero}</Text>
-        </View>
+      <View style={styles.locationContainer}>
+        <Text style={styles.locationLabel}>CÓDIGO DE UBICACIÓN</Text>
+        <Text style={styles.locationValue}>
+          {item.ubicacion || `${item.nave}${item.seccion}${item.numero.padStart(3, '0')}`}
+        </Text>
       </View>
 
       <View style={styles.actionsRow}>
@@ -542,5 +534,28 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0.5,
+  },
+  locationContainer: {
+    backgroundColor: '#262626',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#3D3D3D',
+  },
+  locationLabel: {
+    color: '#888',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  locationValue: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: 2,
   },
 });
