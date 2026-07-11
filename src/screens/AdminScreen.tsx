@@ -29,7 +29,7 @@ import {
   Lock
 } from 'lucide-react-native';
 import { supabase } from '../services/supabase';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, UserRole, ROLE_LABELS, getAllowedRoles } from '../context/AuthContext';
 
 interface Usuario {
   id: string;
@@ -39,7 +39,7 @@ interface Usuario {
   segundo_apellido?: string;
   codigo_empleado: string;
   pin: string;
-  rol: string;
+  rol: UserRole;
   estado: 'activo' | 'suspendido';
 }
 
@@ -88,7 +88,7 @@ export default function AdminScreen({ navigation }: any) {
   const [newSecondLastName, setNewSecondLastName] = useState('');
   const [newCodigo, setNewCodigo] = useState('');
   const [newPin, setNewPin] = useState('');
-  const [newRol, setNewRol] = useState<'auxiliar' | 'supervisor' | 'admin'>('auxiliar');
+  const [newRol, setNewRol] = useState<UserRole>('auxiliar');
   const [secondaryFieldsOptional, setSecondaryFieldsOptional] = useState(false);
 
   // Modal y formulario Editar Usuario
@@ -100,7 +100,7 @@ export default function AdminScreen({ navigation }: any) {
   const [editSecondLastName, setEditSecondLastName] = useState('');
   const [editCodigo, setEditCodigo] = useState('');
   const [editPin, setEditPin] = useState('');
-  const [editRol, setEditRol] = useState<'auxiliar' | 'supervisor' | 'admin'>('auxiliar');
+  const [editRol, setEditRol] = useState<UserRole>('auxiliar');
 
   // Formulario Asignar Ubicación
   const [selectedOperador, setSelectedOperador] = useState<Usuario | null>(null);
@@ -142,11 +142,17 @@ export default function AdminScreen({ navigation }: any) {
 
   const fetchPersonal = async () => {
     try {
-      // Administrador puede ver todos los roles
-      const { data, error } = await supabase
+      let query = supabase
         .from('usuarios_bodega')
         .select('*')
         .order('primer_nombre', { ascending: true });
+
+      // Si el usuario es jefe_operaciones, limitamos la carga a roles inferiores de su jerarquía (supervisor y abajo)
+      if (user?.rol === 'jefe_operaciones') {
+        query = query.in('rol', ['supervisor', 'verificador', 'digitador', 'auxiliar']);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setUsuarios(data || []);
@@ -297,6 +303,17 @@ export default function AdminScreen({ navigation }: any) {
       );
       return;
     }
+
+    const allowed = getAllowedRoles(user?.rol as UserRole);
+    if (allowed.length === 0) {
+      Alert.alert('Error', 'No tienes permisos para crear personal.');
+      return;
+    }
+    if (!allowed.includes(newRol)) {
+      Alert.alert('Error', 'Rol no permitido para tu jerarquía.');
+      return;
+    }
+
     setLoading(true);
     try {
       const { error } = await supabase
@@ -362,6 +379,12 @@ export default function AdminScreen({ navigation }: any) {
         'Datos Incompletos',
         'Por favor llena todos los campos obligatorios (Primer Nombre, Primer Apellido, Código de Empleado). El PIN debe tener exactamente 4 dígitos.'
       );
+      return;
+    }
+
+    const allowed = getAllowedRoles(user?.rol as UserRole);
+    if (!allowed.includes(editRol) && editRol !== editingUser.rol) {
+      Alert.alert('Error', 'Rol no permitido para tu jerarquía.');
       return;
     }
 
@@ -611,7 +634,9 @@ export default function AdminScreen({ navigation }: any) {
           </View>
           <View style={styles.userDetails}>
             <Text style={styles.userName}>{user?.nombre}</Text>
-            <Text style={styles.userRole}>ADMINISTRADOR • #{user?.codigo_empleado}</Text>
+            <Text style={styles.userRole}>
+              {((user?.rol && ROLE_LABELS[user.rol]) || 'ADMINISTRADOR').toUpperCase()} • #{user?.codigo_empleado}
+            </Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
             <TouchableOpacity style={styles.keyBtn} onPress={() => setShowChangePinModal(true)}>
@@ -897,13 +922,21 @@ export default function AdminScreen({ navigation }: any) {
         <View style={styles.tabContainerFull}>
           <View style={styles.personalHeader}>
             <Text style={styles.sectionTitle}>EQUIPO DE TRABAJO ({usuarios.length})</Text>
-            <TouchableOpacity 
-              style={styles.addUserBtn}
-              onPress={() => setShowAddUserModal(true)}
-            >
-              <UserPlus color="#121212" size={16} />
-              <Text style={styles.addUserBtnText}>Agregar</Text>
-            </TouchableOpacity>
+            {!(user?.rol === 'auxiliar' || user?.rol === 'digitador' || user?.rol === 'verificador') && (
+              <TouchableOpacity 
+                style={styles.addUserBtn}
+                onPress={() => {
+                  const allowed = getAllowedRoles(user?.rol as UserRole);
+                  if (allowed.length > 0) {
+                    setNewRol(allowed[0]);
+                  }
+                  setShowAddUserModal(true);
+                }}
+              >
+                <UserPlus color="#121212" size={16} />
+                <Text style={styles.addUserBtnText}>Agregar</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <FlatList
@@ -921,7 +954,7 @@ export default function AdminScreen({ navigation }: any) {
                     {item.primer_nombre} {item.segundo_nombre || ''} {item.primer_apellido} {item.segundo_apellido || ''}
                   </Text>
                   <Text style={styles.userItemInfo}>
-                    Código: #{item.codigo_empleado} • PIN: {item.pin} • Rol: {item.rol.toUpperCase()}
+                    Código: #{item.codigo_empleado} • Rol: {(ROLE_LABELS[item.rol] || item.rol).toUpperCase()}
                   </Text>
                   {/* Indicador visual táctil */}
                   <Text style={{ color: '#ff4444', fontSize: 10, fontWeight: '800', marginTop: 5, letterSpacing: 0.5 }}>
@@ -1090,15 +1123,15 @@ export default function AdminScreen({ navigation }: any) {
               {/* Selector de Rol */}
               <Text style={styles.roleLabel}>ROL ASIGNADO:</Text>
               <View style={styles.rolesRow}>
-                {['auxiliar', 'supervisor', 'admin'].map((r) => (
+                {getAllowedRoles(user?.rol as UserRole).map((r) => (
                   <TouchableOpacity
                     key={r}
                     style={[styles.roleSelectBtn, newRol === r && styles.roleSelectBtnActive]}
-                    onPress={() => setNewRol(r as any)}
+                    onPress={() => setNewRol(r)}
                     disabled={loading}
                   >
                     <Text style={[styles.roleSelectText, newRol === r && styles.roleSelectTextActive]}>
-                      {r.toUpperCase()}
+                      {(ROLE_LABELS[r] || r).toUpperCase()}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -1265,15 +1298,15 @@ export default function AdminScreen({ navigation }: any) {
                 {/* Selector de Rol */}
                 <Text style={styles.roleLabel}>ROL ASIGNADO:</Text>
                 <View style={styles.rolesRow}>
-                  {['auxiliar', 'supervisor', 'admin'].map((r) => (
+                  {getAllowedRoles(user?.rol as UserRole).map((r) => (
                     <TouchableOpacity
                       key={r}
                       style={[styles.roleSelectBtn, editRol === r && styles.roleSelectBtnActive]}
-                      onPress={() => setEditRol(r as any)}
+                      onPress={() => setEditRol(r)}
                       disabled={loading}
                     >
                       <Text style={[styles.roleSelectText, editRol === r && styles.roleSelectTextActive]}>
-                        {r.toUpperCase()}
+                        {(ROLE_LABELS[r] || r).toUpperCase()}
                       </Text>
                     </TouchableOpacity>
                   ))}

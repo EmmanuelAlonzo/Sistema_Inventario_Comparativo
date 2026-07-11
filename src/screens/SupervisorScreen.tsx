@@ -29,7 +29,7 @@ import {
   Lock
 } from 'lucide-react-native';
 import { supabase } from '../services/supabase';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, UserRole, ROLE_LABELS, getAllowedRoles } from '../context/AuthContext';
 
 interface Usuario {
   id: string;
@@ -39,7 +39,7 @@ interface Usuario {
   segundo_apellido?: string;
   codigo_empleado: string;
   pin: string;
-  rol: string;
+  rol: UserRole;
   estado: 'activo' | 'suspendido';
 }
 
@@ -88,6 +88,7 @@ export default function SupervisorScreen({ navigation }: any) {
   const [newSecondLastName, setNewSecondLastName] = useState('');
   const [newCodigo, setNewCodigo] = useState('');
   const [newPin, setNewPin] = useState('');
+  const [newRol, setNewRol] = useState<UserRole>('auxiliar');
   const [secondaryFieldsOptional, setSecondaryFieldsOptional] = useState(false);
 
   // Formulario Asignar Ubicación
@@ -130,11 +131,11 @@ export default function SupervisorScreen({ navigation }: any) {
 
   const fetchPersonal = async () => {
     try {
-      // Supervisor únicamente puede ver perfiles con rol === 'auxiliar'
+      // Supervisor únicamente puede ver perfiles con rol auxiliar, digitador o verificador
       const { data, error } = await supabase
         .from('usuarios_bodega')
         .select('*')
-        .eq('rol', 'auxiliar')
+        .in('rol', ['auxiliar', 'digitador', 'verificador'])
         .order('primer_nombre', { ascending: true });
 
       if (error) throw error;
@@ -296,6 +297,17 @@ export default function SupervisorScreen({ navigation }: any) {
       );
       return;
     }
+
+    const allowed = getAllowedRoles(user?.rol as UserRole);
+    if (allowed.length === 0) {
+      Alert.alert('Error', 'No tienes permisos para crear personal.');
+      return;
+    }
+    if (!allowed.includes(newRol)) {
+      Alert.alert('Error', 'Rol no permitido para tu jerarquía.');
+      return;
+    }
+
     setLoading(true);
     try {
       const { error } = await supabase
@@ -308,7 +320,7 @@ export default function SupervisorScreen({ navigation }: any) {
             segundo_apellido: newSecondLastName.trim() || null,
             codigo_empleado: newCodigo.trim(),
             pin: newPin.trim(),
-            rol: 'auxiliar',
+            rol: newRol,
             estado: 'activo'
           }
         ]);
@@ -323,6 +335,7 @@ export default function SupervisorScreen({ navigation }: any) {
       setNewSecondLastName('');
       setNewCodigo('');
       setNewPin('');
+      setNewRol('auxiliar');
       setSecondaryFieldsOptional(false);
       fetchPersonal();
     } catch (e: any) {
@@ -804,14 +817,22 @@ export default function SupervisorScreen({ navigation }: any) {
       {activeTab === 'personal' && (
         <View style={styles.tabContainerFull}>
           <View style={styles.personalHeader}>
-            <Text style={styles.sectionTitle}>EQUIPO DE TRABAJO (AUXILIARES: {usuarios.length})</Text>
-            <TouchableOpacity 
-              style={styles.addUserBtn}
-              onPress={() => setShowAddUserModal(true)}
-            >
-              <UserPlus color="#121212" size={16} />
-              <Text style={styles.addUserBtnText}>Agregar</Text>
-            </TouchableOpacity>
+            <Text style={styles.sectionTitle}>EQUIPO DE TRABAJO ({usuarios.length})</Text>
+            {!(user?.rol === 'auxiliar' || user?.rol === 'digitador' || user?.rol === 'verificador') && (
+              <TouchableOpacity 
+                style={styles.addUserBtn}
+                onPress={() => {
+                  const allowed = getAllowedRoles(user?.rol as UserRole);
+                  if (allowed.length > 0) {
+                    setNewRol(allowed[0]);
+                  }
+                  setShowAddUserModal(true);
+                }}
+              >
+                <UserPlus color="#121212" size={16} />
+                <Text style={styles.addUserBtnText}>Agregar</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <FlatList
@@ -825,7 +846,7 @@ export default function SupervisorScreen({ navigation }: any) {
                     {item.primer_nombre} {item.segundo_nombre || ''} {item.primer_apellido} {item.segundo_apellido || ''}
                   </Text>
                   <Text style={styles.userItemInfo}>
-                    Código: #{item.codigo_empleado} • PIN: {item.pin}
+                    Código: #{item.codigo_empleado} • Rol: {(ROLE_LABELS[item.rol] || item.rol).toUpperCase()}
                   </Text>
                 </View>
                 <TouchableOpacity 
@@ -901,7 +922,7 @@ export default function SupervisorScreen({ navigation }: any) {
         <View style={styles.modalOverlay}>
           <ScrollView contentContainerStyle={{flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20}}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>NUEVO OPERADOR (AUXILIAR)</Text>
+              <Text style={styles.modalTitle}>REGISTRAR NUEVO OPERADOR</Text>
               
               <TextInput
                 style={styles.modalInput}
@@ -960,6 +981,23 @@ export default function SupervisorScreen({ navigation }: any) {
                 onChangeText={setNewPin}
                 editable={!loading}
               />
+
+              {/* Selector de Rol */}
+              <Text style={styles.roleLabel}>ROL ASIGNADO:</Text>
+              <View style={styles.rolesRow}>
+                {getAllowedRoles(user?.rol as UserRole).map((r) => (
+                  <TouchableOpacity
+                    key={r}
+                    style={[styles.roleSelectBtn, newRol === r && styles.roleSelectBtnActive]}
+                    onPress={() => setNewRol(r)}
+                    disabled={loading}
+                  >
+                    <Text style={[styles.roleSelectText, newRol === r && styles.roleSelectTextActive]}>
+                      {(ROLE_LABELS[r] || r).toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
               {/* Switch de campos secundarios opcionales */}
               <View style={styles.switchRow}>
@@ -1547,5 +1585,40 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '600',
+  },
+  roleLabel: {
+    color: '#888',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginTop: 5,
+    marginBottom: 8,
+  },
+  rolesRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 20,
+  },
+  roleSelectBtn: {
+    flex: 1,
+    height: 38,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#3D3D3D',
+    backgroundColor: '#262626',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roleSelectBtnActive: {
+    borderColor: '#e6a822',
+    backgroundColor: 'rgba(230, 168, 34, 0.1)',
+  },
+  roleSelectText: {
+    color: '#888',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  roleSelectTextActive: {
+    color: '#e6a822',
   },
 });

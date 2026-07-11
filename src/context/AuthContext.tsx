@@ -2,11 +2,35 @@ import React, { createContext, useState, useEffect, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
 
+export type UserRole = 'auxiliar' | 'digitador' | 'verificador' | 'supervisor' | 'jefe_operaciones' | 'admin';
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  auxiliar: 'Auxiliar',
+  digitador: 'Digitador',
+  verificador: 'Verificador',
+  supervisor: 'Supervisor',
+  jefe_operaciones: 'Jefe de Operaciones',
+  admin: 'Administrador',
+};
+
+export function getAllowedRoles(currentUserRole: UserRole): UserRole[] {
+  switch (currentUserRole) {
+    case 'admin':
+      return ['jefe_operaciones', 'supervisor', 'verificador', 'digitador', 'auxiliar'];
+    case 'jefe_operaciones':
+      return ['supervisor', 'verificador', 'digitador', 'auxiliar'];
+    case 'supervisor':
+      return ['verificador', 'digitador', 'auxiliar'];
+    default:
+      return [];
+  }
+}
+
 export interface UserProfile {
   id: string;
   nombre: string;
   codigo_empleado: string;
-  rol: 'admin' | 'supervisor' | 'auxiliar';
+  rol: UserRole;
   estado: 'activo' | 'suspendido';
 }
 
