@@ -352,6 +352,13 @@ export default function AdminScreen({ navigation }: any) {
   };
 
   const handleOpenEditModal = (item: Usuario) => {
+    if (user?.rol === 'jefe_operaciones') {
+      Alert.alert(
+        'Acceso Denegado',
+        'Solo los administradores pueden editar el personal existente.'
+      );
+      return;
+    }
     console.log("Abriendo modal para:", item.primer_nombre);
     
     // Guardar los datos de forma inmediata y síncrona en los estados locales
@@ -946,8 +953,9 @@ export default function AdminScreen({ navigation }: any) {
             renderItem={({ item }) => (
               <TouchableOpacity 
                 style={styles.userItem}
-                activeOpacity={0.7}
+                activeOpacity={user?.rol === 'jefe_operaciones' ? 1 : 0.7}
                 onPress={() => handleOpenEditModal(item)}
+                disabled={user?.rol === 'jefe_operaciones'}
               >
                 <View style={styles.userMeta}>
                   <Text style={styles.userItemName}>
@@ -957,9 +965,11 @@ export default function AdminScreen({ navigation }: any) {
                     Código: #{item.codigo_empleado} • Rol: {(ROLE_LABELS[item.rol] || item.rol).toUpperCase()}
                   </Text>
                   {/* Indicador visual táctil */}
-                  <Text style={{ color: '#ff4444', fontSize: 10, fontWeight: '800', marginTop: 5, letterSpacing: 0.5 }}>
-                    👉 Pulsar para Editar
-                  </Text>
+                  {user?.rol !== 'jefe_operaciones' && (
+                    <Text style={{ color: '#ff4444', fontSize: 10, fontWeight: '800', marginTop: 5, letterSpacing: 0.5 }}>
+                      👉 Pulsar para Editar
+                    </Text>
+                  )}
                 </View>
 
                 <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
